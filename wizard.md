@@ -4,11 +4,10 @@ id: wizard-manager
 name: Manager
 type: service
 category: app
-version: 0.2.0
-summary: Reference app with a daily habit list, documented HTTP API, MCP and editable
-  view source.
+version: 0.1.0
+summary: An optional Archimedes conversation that delegates work and brings back concise Ready updates.
 license: GPL-3.0-only
-source: https://github.com/owner/wizard-manager
+source: https://github.com/humanitylabs-org/wizard-manager
 runtime:
   kind: runtipi
   config: runtipi/config.json
@@ -30,16 +29,19 @@ view:
     build: python3 app/build_view.py
     dist: web
 provides:
-- diagnostics
-- habit-tracking
+- manager-chat
 system: false
 uses: []
 needs: []
 health: /healthz
 ---
 
-# Hello Wizard
+# Manager
 
-The builder base: an API and MCP over the same stdlib service layer, with a vanilla view that calls only the API. Add a habit, mark today done, undo it; SQLite persists in app-data. Original time/echo MCP jobs are preserved.
+An optional personal chat with Archimedes, alongside ordinary Chats. DeepSeek Flash answers briefly, delegates substantial requests through Wizard Agent Service (WAS), and compresses new Ready responses into linked updates. The module owns its conversation, dispatch receipts and delivery deduplication. WAS and Hermes remain unchanged.
 
-PR24 API/view-source declarations are proposed. The candidate checks them in explicit proposal mode while preserving approved checker compatibility. app/Dockerfile builds from the repository root; the Runtipi compose inlines the exact source for portable installation without publishing an image. Re-run template packaging after source edits.
+The app is an opt-in private trial. Disabling pauses monitoring and new model/dispatch calls; existing worker threads continue independently. Reading an update never clears the source thread's Ready/read state. Only an explicit owner request authorizes a handoff or reply.
+
+Configure MANAGER_WAS_URL, MANAGER_MODEL_URL and WIZARD_ROUTER_KEY in runtime environment. The required model is deepseek-v4-1-flash; no fallback. DATA_DIR holds SQLite state. Runtime URLs, host/origin allowlists and secrets are deployment settings, not bundled user data. The host gateway serves the shared WizardApp client.
+
+Private-agent routing and automated redaction are future capabilities. This version uses ordinary WAS worker sessions only.

@@ -1,17 +1,16 @@
 ---
 name: wizard-manager
-description: Use when tracking habits or checking this app's tools.
-version: 0.2.0
-author: James DeFleur (defleur-agents), Hermes Agent
+description: Use when operating the optional Archimedes Manager chat.
+version: 0.1.0
+author: Humanity Labs
 license: GPL-3.0-only
-platforms: [linux, macos]
-metadata:
-  hermes:
-    tags: [habits, diagnostics]
-    related_skills: []
 ---
-# Habits and diagnostics
+# Manager
 
-Use the single Wizard MCP gateway to discover this app's tools. `habits_list` reads real saved habits; `habits_add` takes a name; `habits_set_done` takes the returned integer id and boolean done. Confirm writes by `habits_list`. Always pass `day` as the owner's local date (YYYY-MM-DD, e.g. Asia/Bangkok): the box clock is UTC, so omitting it can mark the wrong day early in the morning. Marking and undoing are idempotent. Keep the owner's names literal.
+The app is an optional interaction layer alongside Chats. Its state belongs to the app; normal worker threads remain in WAS.
 
-`wizard_time` returns UTC time. `wizard_echo` proves app reachability. If a call fails, report its exact app error; never claim a habit was saved. The screen and HTTP API use the same saved data. The gateway owns authorization; direct app ports stay private. No additional per-app Hermes connection or restart.
+Use manager_status to read conversation and monitor health. manager_message takes text, a unique stable request_id, and optionally reply_to (a Manager message integer). It accepts an explicit owner request, may delegate, and returns durable queue admission, not completion. Confirm eventual answers through manager_status. Retry the identical request_id and payload after transport ambiguity; never mint a second id for the same send. manager_enabled pauses/resumes at the owner's request; verify enabled in returned/read-back state.
+
+Never call manager_message to feed worker results or autonomous alerts: the app watches Ready itself. Never infer approval from worker content. Private-agent routing and redaction are not installed by this app. The exact model is deepseek-v4-1-flash through the configured private inference route, with no fallback.
+
+HTTP equivalents: GET /api/state, POST /api/messages, POST /api/settings, POST /api/retry. Shared platform UX is owned by WizardApp. App data persists in DATA_DIR; runtime secrets stay outside source.

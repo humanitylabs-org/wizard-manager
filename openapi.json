@@ -1,176 +1,126 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "Hello Wizard habits and diagnostics",
-    "version": "0.2.0"
+    "title": "Wizard Manager",
+    "version": "0.1.0"
   },
   "paths": {
-    "/api/habits": {
+    "/api/state": {
       "get": {
-        "summary": "List habits and server ISO day",
+        "summary": "Read persistent conversation, jobs and monitor state",
+        "description": "Supports after integer message cursor. messages are ascending; job_id correlates sends. jobs excludes completed jobs.",
         "responses": {
           "200": {
-            "description": "{day, habits:[{id,name,done}]}"
+            "description": "Successful response"
           },
           "400": {
-            "description": "Invalid day"
-          }
-        },
-        "parameters": [
-          {
-            "name": "day",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "format": "date"
-            },
-            "description": "Owner's local date; defaults to the box's UTC date. Must be within a day of UTC."
-          }
-        ]
-      },
-      "post": {
-        "summary": "Add a habit",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 60
-                  },
-                  "day": {
-                    "type": "string",
-                    "format": "date",
-                    "description": "Owner's local date (YYYY-MM-DD)."
-                  }
-                },
-                "required": [
-                  "name"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Updated list"
+            "description": "Invalid request"
           },
-          "400": {
-            "description": "Invalid name"
+          "403": {
+            "description": "Untrusted host/origin"
           },
           "409": {
-            "description": "Duplicate name"
+            "description": "Disabled state or conflicting request"
           }
         }
       }
     },
-    "/api/habits/{id}/today": {
+    "/api/messages": {
       "post": {
-        "summary": "Idempotently mark or undo today",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "done": {
-                    "type": "boolean"
-                  },
-                  "day": {
-                    "type": "string",
-                    "format": "date",
-                    "description": "Owner's local date (YYYY-MM-DD)."
-                  }
-                },
-                "required": [
-                  "done"
-                ]
-              }
-            }
-          }
-        },
+        "summary": "Admit an explicit owner message",
+        "description": "Body: text, request_id (stable unique string), optional reply_to (Manager message integer). 202 durable queue receipt; replay identical request safely.",
         "responses": {
-          "200": {
-            "description": "Updated list"
+          "202": {
+            "description": "Successful response"
           },
           "400": {
-            "description": "Invalid boolean"
+            "description": "Invalid request"
           },
-          "404": {
-            "description": "No such habit"
+          "403": {
+            "description": "Untrusted host/origin"
+          },
+          "409": {
+            "description": "Disabled state or conflicting request"
           }
         }
       }
     },
-    "/api/time": {
-      "get": {
-        "summary": "Current UTC time",
-        "responses": {
-          "200": {
-            "description": "{utc: ISO UTC timestamp}"
-          }
-        }
-      }
-    },
-    "/api/echo": {
+    "/api/settings": {
       "post": {
-        "summary": "Echo text",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "text": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        },
+        "summary": "Pause or resume optional Manager",
+        "description": "Body: enabled boolean. Returns fresh state. Worker sessions continue when paused.",
         "responses": {
           "200": {
-            "description": "{text}"
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Untrusted host/origin"
+          },
+          "409": {
+            "description": "Disabled state or conflicting request"
+          }
+        }
+      }
+    },
+    "/api/retry": {
+      "post": {
+        "summary": "Retry a failed accepted message",
+        "description": "Body: request_id. Only a failed job may retry. Original side-effect idempotency key is retained.",
+        "responses": {
+          "202": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Untrusted host/origin"
+          },
+          "409": {
+            "description": "Disabled state or conflicting request"
           }
         }
       }
     },
     "/healthz": {
       "get": {
-        "summary": "Health and app version",
+        "summary": "App process health",
+        "description": "Returns ok, app, version, enabled.",
         "responses": {
           "200": {
-            "description": "{ok,app,version}"
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Untrusted host/origin"
+          },
+          "409": {
+            "description": "Disabled state or conflicting request"
           }
         }
       }
     },
     "/mcp": {
       "post": {
-        "summary": "Stateless streamable HTTP JSON-RPC MCP; initialize, tools/list, tools/call, ping",
+        "summary": "Stateless streamable HTTP MCP",
+        "description": "initialize, ping, tools/list, tools/call; notifications return 202.",
         "responses": {
-          "200": {
-            "description": "JSON-RPC response"
-          },
           "202": {
-            "description": "Notification acknowledged"
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Untrusted host/origin"
+          },
+          "409": {
+            "description": "Disabled state or conflicting request"
           }
         }
       }

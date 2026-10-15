@@ -5,6 +5,6 @@ COPY web /app/web
 COPY openapi.json /app/openapi.json
 RUN mkdir /data && chown 1000:1000 /data
 USER 1000:1000
-ENV DATA_DIR=/data
+ENV DATA_DIR=/data BIND=0.0.0.0
 EXPOSE 8799
 CMD ["python", "/app/app/server.py"]
