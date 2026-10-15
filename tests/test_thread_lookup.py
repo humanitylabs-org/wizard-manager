@@ -3,10 +3,12 @@ import json
 import sys
 import tempfile
 import time
+import socket
 import unittest
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'app'))
 from manager import Manager, MODEL
 import thread_lookup as lookup
@@ -131,6 +133,37 @@ class LookupTests(unittest.TestCase):
         self.assertEqual(context['lookup']['failed_threads'], 1)
         self.assertFalse(context['lookup']['absence_proven'])
         self.assertIn('Never conclude', self.api.prompt[0]['content'])
+        self.assertEqual(result['lookup'], context['lookup'])
+        self.assertEqual(context['lookup']['failure_scope'], 'history_retrieval_not_task_execution')
+        self.assertIn('never evidence that agent tasks failed', self.api.prompt[0]['content'])
+
+    def test_history_failure_diagnostics_are_bounded_and_redacted(self):
+        rows = [{'id': str(i)} for i in range(12)]
+        def broken(url, **kwargs):
+            raise HTTPError(url, 502, 'SECRET upstream body', {}, None)
+        _, meta = lookup.retrieve(rows, ['orb'], broken, 'http://was', str)
+        self.assertEqual(meta['failed_threads'], 12)
+        self.assertEqual(len(meta['failure_diagnostics']), lookup.DIAGNOSTIC_LIMIT)
+        self.assertEqual(meta['failure_diagnostics_omitted'], 4)
+        self.assertEqual(meta['unattempted_threads'], 0)
+        self.assertNotIn('SECRET', json.dumps(meta))
+        for item in meta['failure_diagnostics']:
+            self.assertEqual(item['kind'], 'http_error')
+            self.assertEqual(item['http_status'], 502)
+            self.assertEqual(item['exception'], 'HTTPError')
+            self.assertEqual(item['offset'], 0)
+            self.assertGreaterEqual(item['elapsed_ms'], 0)
+            self.assertLessEqual(item['request_timeout_ms'], 4000)
+
+    def test_timeout_and_malformed_diagnostics_remain_distinct(self):
+        self.assertEqual(lookup.failure_detail(socket.timeout('SECRET'))['kind'], 'timeout')
+        def broken(url, **kwargs):
+            raise URLError(TimeoutError('SECRET'))
+        _, meta = lookup.retrieve(self.api.rows, ['orb'], broken, 'http://was', str)
+        self.assertEqual(meta['failure_diagnostics'][0]['kind'], 'timeout')
+        self.api.history['thread', 0] = {'data': []}
+        _, meta = lookup.retrieve(self.api.rows, ['orb'], self.api, 'http://was', str)
+        self.assertEqual(meta['failure_diagnostics'][0]['kind'], 'invalid_response')
 
     def test_inventory_pages_use_snapshot_and_dedup_results(self):
         self.api.rows = [{'id': str(i), 'title': 'Unrelated'} for i in range(105)]
@@ -161,6 +194,9 @@ class LookupTests(unittest.TestCase):
         self.assertEqual(evidence, {})
         self.assertEqual(self.api.calls, [])
         self.assertFalse(meta['history_coverage_complete'])
+        self.assertEqual(meta['failed_threads'], 0)
+        self.assertEqual(meta['unattempted_threads'], 1)
+        self.assertTrue(meta['time_budget_exhausted'])
 
     def test_page_and_depth_budgets_stop_full_projected_pages(self):
         for offset in range(0, 2500, 500):
