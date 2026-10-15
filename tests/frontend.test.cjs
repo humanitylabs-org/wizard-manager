@@ -70,6 +70,30 @@ async function setup(t, options = {}) {
   const draft = () => frame.evaluate(() => JSON.parse(localStorage.getItem('wizard-manager:conversation:v1')));
   return { page, frame, context, state, posts, poll, draft, custom: fn => { custom = fn; } };
 }
+for (const viewport of [{width:390,height:844},{width:1280,height:900}]) test(`caught-up return keeps last messages and exposes first new boundary ${viewport.width}`, async t => {
+  const f=await setup(t,{hosted:true,viewport,state:{messages:Array.from({length:20},(_,i)=>ready(i+1))},init:()=>localStorage.getItem('wizard-manager:conversation:v1')||localStorage.setItem('wizard-manager:conversation:v1',JSON.stringify({rev:0,text:'kept draft',scroll:{pinned:true},read:{seen:0,viewed:[19,20],divider:1}}))});
+  await f.page.waitForTimeout(1100);
+  assert.equal((await f.draft()).read.seen,20,'migrate the stranded old-history boundary');
+  await f.frame.evaluate(()=>{const e=document.querySelector('#conversation');e.scrollTop=e.scrollHeight;});
+  await f.page.waitForTimeout(300);const before=(await f.draft()).scroll;
+  await f.page.evaluate(()=>{window.qaHidden=true;document.querySelector('iframe').style.display='none';});
+  await f.page.waitForTimeout(400);
+  assert.deepEqual((await f.draft()).scroll,before,'hidden zero geometry must not overwrite saved position');
+  f.state.messages.push(ready(21),ready(22),ready(23));
+  await f.page.evaluate(()=>{window.qaHidden=false;document.querySelector('iframe').style.display='';});
+  await f.poll();await f.frame.waitForSelector('[data-message-id="23"]');
+  const view=await f.frame.evaluate(()=>{const s=document.querySelector('#conversation').getBoundingClientRect(),d=document.querySelector('.mgr-new-messages'),r=d?.getBoundingClientRect();return {id:d?.nextElementSibling?.dataset.messageId,offset:r?.top-s.top,bottom:r?.bottom-s.top,height:s.height};});
+  assert.equal(view.id,'21');assert(view.offset>=0&&view.bottom<view.height,'first new boundary must be visible on return');
+  assert(view.offset>=77,'keep a little of the last-read message above the line');
+  const top=await f.frame.locator('#conversation').evaluate(e=>e.scrollTop);
+  f.state.messages.push(ready(24));await f.poll();
+  assert(Math.abs(await f.frame.locator('#conversation').evaluate(e=>e.scrollTop)-top)<3,'subsequent arrivals must not jump to the end');
+  assert.equal(await f.frame.locator('.mgr-new-messages').evaluate(e=>e.nextElementSibling.dataset.messageId),'21');
+  const saved=(await f.draft()).scroll;
+  await f.page.reload();const frame=f.page.frames().find(x=>x.url().endsWith('/index.html'));await frame.waitForSelector('[data-message-id="24"]');await f.page.waitForTimeout(300);
+  const restored=await frame.evaluate(()=>JSON.parse(localStorage.getItem('wizard-manager:conversation:v1')));
+  assert.equal(restored.scroll.anchorMessageId,saved.anchorMessageId);assert(Math.abs(restored.scroll.offset-saved.offset)<3);assert.equal(restored.text,'kept draft');
+});
 test('inline named links update historical display only; safe anchors retain draft and exact destinations', async t => {
   const threads = [{id: 'thread/one', title: 'Wizard OS · Share files'}, {id: 'thread/two', title: 'Unify responsive features across desktop and mobile'}];
   const text = 'Share files and Unify responsive features are running.';
@@ -425,21 +449,19 @@ test('read watermark advances only after visibility; away arrivals start a persi
   assert.equal((await f.draft()).read.divider, 2, 'arrivals during catch-up retain the same line');
 });
 
-test('offscreen gaps are not read by jumping below them; catch-up anchor and receipts survive reload', async t => {
+test('reading the latest message advances catch-up position; hidden arrivals stay unread across reload', async t => {
   const f = await setup(t, { hosted: true, state: { messages: Array.from({length:12}, (_,i) => ready(i+1)) } });
   await f.frame.locator('#conversation').evaluate(n => { n.scrollTop = n.scrollHeight; });
   await f.page.waitForTimeout(1100);
-  const r = (await f.draft()).read;
-  assert.equal(r.seen, 0, 'unread gap blocks contiguous watermark');
-  assert.ok(r.viewed.includes(12), 'visible last message has a sparse read receipt');
-  assert.equal(r.divider, 1);
+  assert.equal((await f.draft()).read.seen, 12, 'older gaps cannot strand the next-visit marker');
+  assert.equal((await f.draft()).read.divider, 1, 'current-visit boundary stays stable');
   await f.page.evaluate(() => window.qaHidden = true); await f.page.waitForTimeout(300);
   f.state.messages.push(ready(13)); await f.poll(); await f.page.waitForTimeout(850);
-  assert.deepEqual((await f.draft()).read, r, 'hidden fetch never advances read receipts');
+  assert.equal((await f.draft()).read.seen, 12, 'hidden fetch never advances read position');
+  assert.equal((await f.draft()).read.divider, 13, 'new visit boundary follows the last-read message');
   await f.frame.goto(origin + '/index.html'); await f.page.evaluate(() => window.qaHidden = false); await f.frame.waitForFunction(() => document.querySelector('[data-message-id="13"]'));
-  assert.equal((await f.draft()).read.divider, 1);
-  assert.equal((await f.draft()).read.seen, 0);
-  assert.ok((await f.draft()).read.viewed.includes(12));
+  assert.equal((await f.draft()).read.divider, 13);
+  assert.equal((await f.draft()).read.seen, 12);
 });
 
 test('orb receiver rechecks pinned authorization after state read and before POST', async t => {
