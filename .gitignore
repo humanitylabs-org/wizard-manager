@@ -1,0 +1,8 @@
+.data/
+__pycache__/
+*.pyc
+.env
+.env.*
+qa-evidence/
+node_modules/
+.DS_Store
