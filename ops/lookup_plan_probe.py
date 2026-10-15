@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'app'))
 from manager import Manager, MODEL, http_json
+from operational_status import health_url
 
 
 def main():
@@ -32,12 +33,17 @@ def main():
               'source_hashes': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                   for p in (Path(__file__).resolve().parents[1] / 'app').glob('*.py')}, 'cases': []}
     for case in config['cases']:
-        calls, prompts, models = [], [], []
+        calls, prompts, models, health_reads, model_outputs = [], [], [], [], []
         def readonly(url, body=None, headers=None, method=None, timeout=30):
             if url == config['model_url']:
                 assert body and body['model'] == MODEL and method is None
                 prompts.append(body['messages'])
                 out.with_suffix('.context.json').write_text(json.dumps(body, ensure_ascii=False, indent=2))
+            elif url == health_url(config['was']):
+                assert body is None and method is None and timeout <= 4
+                if case.get('simulate_health_failure'):
+                    calls.append({'kind': 'injected-health-failure', 'path': urlsplit(url).path})
+                    raise TimeoutError('Deliberate health failure test')
             else:
                 assert url.startswith(config['was'] + '/api/sessions')
                 assert body is None and method is None
@@ -60,6 +66,9 @@ def main():
             calls.append({'kind': 'model' if body else 'WAS-read', 'path': urlsplit(url).path})
             if body:
                 models.append(response.get('model'))
+                model_outputs.append(response['choices'][0]['message']['content'])
+            elif url == health_url(config['was']):
+                health_reads.append(response.get('queue'))
             return response
         start = time.monotonic()
         with tempfile.TemporaryDirectory(prefix='lookup-plan-', dir=out.parent) as tmp:
@@ -69,9 +78,18 @@ def main():
                 job = dict(c.execute('SELECT * FROM jobs').fetchone())
             plan = m.plan(job)
             context = json.loads(prompts[-1][-1]['content'])
-            ids = [s['id'] for s in context['work'] if s.get('evidence')]
-            passed = (plan['action'] == 'reply' and models == [MODEL]
+            ids = [s['id'] for s in context.get('work', []) if s.get('evidence')]
+            passed = (plan['action'] == case.get('expected_action', 'reply') and bool(models) and all(m == MODEL for m in models)
                       and all(sid in ids for sid in case.get('expected_evidence_ids', [])))
+            if case.get('expect_queue'):
+                status = plan.get('operational_status', {})
+                passed &= (status.get('state') == 'available' and len(health_reads) == 1
+                           and status.get('queue') == health_reads[0]
+                           and not any('/api/sessions' in c['path'] for c in calls))
+            if case.get('simulate_health_failure'):
+                passed &= plan.get('operational_status', {}).get('state') == 'unavailable'
+            if case.get('expect_not_queue'):
+                passed &= 'operational_status' not in plan and not health_reads
             if case.get('simulate_inventory_failure'):
                 passed &= context['lookup']['state'] == 'unavailable'
             if case.get('expect_no_evidence'):
@@ -82,13 +100,14 @@ def main():
                     assert c.execute("SELECT count(*) FROM messages WHERE role='assistant'").fetchone()[0] == 0
             result = {'name': case['name'], 'seconds': round(time.monotonic()-start, 3),
                       'passed': passed, 'plan': plan, 'context': context, 'models': models,
+                      'model_outputs': model_outputs, 'health_reads': health_reads,
                       'calls': calls, 'expected_evidence_ids': case.get('expected_evidence_ids', [])}
             report['cases'].append(result)
             report['passed'] = sum(c['passed'] for c in report['cases'])
             report['total'] = len(report['cases'])
             out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
             print(json.dumps({k:v for k,v in result.items() if k not in ('context', 'calls')}, ensure_ascii=False), flush=True)
-            print(json.dumps({'lookup': context['lookup'], 'evidence_ids': ids}), flush=True)
+            print(json.dumps({'lookup': context.get('lookup'), 'evidence_ids': ids}), flush=True)
     return 0 if report['passed'] == report['total'] else 1
 
 if __name__ == '__main__':

@@ -7,8 +7,26 @@ No persistent transcript cache, tools, embeddings, or private-agent requests.
 import re
 import math
 import time
+import socket
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
+from urllib.error import HTTPError, URLError
+
+DIAGNOSTIC_LIMIT = 8
+
+
+def failure_detail(exc, elapsed=None):
+    """Bounded metadata only: never expose response bodies, URLs or credentials."""
+    cause = exc.reason if isinstance(exc, URLError) else exc
+    kind = ('http_error' if isinstance(exc, HTTPError) else
+            'timeout' if isinstance(cause, (TimeoutError, socket.timeout)) else
+            'invalid_response' if isinstance(exc, (ValueError, KeyError, TypeError)) else 'transport_error')
+    detail = {'kind': kind, 'exception': type(exc).__name__[:80]}
+    if isinstance(exc, HTTPError):
+        detail['http_status'] = exc.code
+    if elapsed is not None:
+        detail['elapsed_ms'] = round(max(0, elapsed) * 1000)
+    return detail
 
 PAGE_SIZE = 500
 THREAD_LIMIT = 96
@@ -92,16 +110,23 @@ def retrieve(sessions, terms, request, was, clean, deadline=None):
         for s in (a, b):
             if len(candidates) < THREAD_LIMIT:
                 candidates[s['id']] = s
-    states = {sid: {'offset': 0, 'pages': 0, 'done': False, 'failed': False,
+    states = {sid: {'offset': 0, 'pages': 0, 'done': False, 'failed': False, 'attempts': 0,
                     'matches': {}, 'recent': {}} for sid in candidates}
     pages = 0
+    diagnostics = []
     def read(sid):
-        left = deadline - time.monotonic()
-        if left <= 0:
-            raise TimeoutError('lookup budget')
-        return request(f'{was}/api/sessions/{quote(sid, safe="")}/messages'
-                       f'?order=latest&limit={PAGE_SIZE}&offset={states[sid]["offset"]}'
-                       '&include_compacted=true&view=wizard', timeout=min(4, left))
+        started = time.monotonic()
+        states[sid]['attempts'] += 1
+        try:
+            left = deadline - started
+            if left <= 0:
+                raise TimeoutError('lookup budget')
+            states[sid]['timeout_ms'] = round(min(4, left) * 1000)
+            return request(f'{was}/api/sessions/{quote(sid, safe="")}/messages'
+                           f'?order=latest&limit={PAGE_SIZE}&offset={states[sid]["offset"]}'
+                           '&include_compacted=true&view=wizard', timeout=min(4, left))
+        finally:
+            states[sid]['elapsed'] = time.monotonic() - started
 
     with ThreadPoolExecutor(max_workers=6, thread_name_prefix='manager-lookup') as pool:
         # One page per candidate before deepening. Failed/malformed pages do not
@@ -158,8 +183,12 @@ def retrieve(sessions, terms, request, was, clean, deadline=None):
                                 st['matches'][ident] = item
                         st['matches'] = dict(sorted(st['matches'].items(), key=lambda pair:
                             (len(pair[1]['terms']), pair[1]['role'] == 'user'), reverse=True)[:8])
-                    except Exception:
+                    except Exception as exc:
                         st['failed'] = True
+                        if len(diagnostics) < DIAGNOSTIC_LIMIT:
+                            diagnostics.append({'session_id': sid, 'offset': st['offset'],
+                                'request_timeout_ms': st.get('timeout_ms', 0),
+                                **failure_detail(exc, st.get('elapsed', 0))})
             if pages >= PAGE_LIMIT or time.monotonic() >= deadline:
                 break
     # Rare topic words matter more than vocabulary shared by many coding chats.
@@ -181,6 +210,12 @@ def retrieve(sessions, terms, request, was, clean, deadline=None):
                       'threads_read': sum(st['pages'] > 0 for st in states.values()),
                       'pages_read': sum(st['pages'] for st in states.values()),
                       'failed_threads': sum(st['failed'] for st in states.values()),
+                      'failure_scope': 'history_retrieval_not_task_execution',
+                      'failure_diagnostics': diagnostics,
+                      'failure_diagnostics_omitted': max(0, sum(st['failed'] for st in states.values()) - len(diagnostics)),
+                      'unattempted_threads': len(allowed) - sum(st['attempts'] > 0 for st in states.values()),
+                      'time_budget_exhausted': time.monotonic() >= deadline,
+                      'page_budget_exhausted': pages >= PAGE_LIMIT,
                       'history_coverage_complete': complete,
                       # Even a complete lexical pass is not semantic proof of absence.
                       'absence_proven': False}
