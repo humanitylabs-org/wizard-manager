@@ -44,4 +44,6 @@ The app is an opt-in private trial. Disabling pauses monitoring and new model/di
 
 Configure MANAGER_WAS_URL, MANAGER_MODEL_URL and WIZARD_ROUTER_KEY in runtime environment. The required model is deepseek-v4-1-flash; no fallback. DATA_DIR holds SQLite state. Runtime URLs, host/origin allowlists and secrets are deployment settings, not bundled user data. The host gateway serves the shared WizardApp client.
 
+`MANAGER_READY_DB` explicitly enables a read-only Ready-event adapter for the ordinary agent's canonical SQLite message store. It reads retained per-response status markers by insertion ID (including compacted display history); WAS supplies the visible-session allowlist and active-state gate. No Hermes code, WAS code or source database is changed. This is required for full offline catch-up because the current WAS history response strips status markers. Configure only the ordinary agent store, never mount an entire Hermes home or a Private profile. This adapter is isolated behind `ReadySource` so a future generic WAS event feed can replace it.
+
 Private-agent routing and automated redaction are future capabilities. This version uses ordinary WAS worker sessions only.
