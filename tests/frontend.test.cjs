@@ -85,7 +85,7 @@ test('Ready content is inert, faithful structured ask; stable exact card targeti
   assert.equal(await f.frame.locator('.mgr-summary img').count(), 0);
   assert.match(await f.frame.locator('.mgr-ask').textContent(), /May I publish/);
   assert.equal(await f.frame.getByRole('button', { name: 'Approve everything' }).count(), 0);
-  assert.equal(await f.frame.locator('[data-ready-id="1"] a').getAttribute('href'), '/wizard/?session=thread%2F1');
+  assert.equal(await f.frame.locator('[data-ready-id="1"] a').getAttribute('href'), '/wizard-os-home/?session=thread%2F1');
   assert.equal(await f.frame.locator('[data-ready-id="1"] a').getAttribute('target'), '_top');
   await f.frame.locator('#message').fill('Please approve the publication');
   await f.frame.locator('[data-ready-id="1"] button').click();

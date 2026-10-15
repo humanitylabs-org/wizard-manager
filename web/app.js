@@ -77,7 +77,7 @@
   }
   function source(m) { return typeof m.source_id === 'string' && m.source_id.trim() && m.source_id.length < 2048 && m.source_available !== false; }
   function link(m, label = 'Open thread') {
-    const a = element('a', '', label); a.href = '/wizard/?session=' + encodeURIComponent(m.source_id); a.target = '_top';
+    const a = element('a', '', label); a.href = '/wizard-os-home/?session=' + encodeURIComponent(m.source_id); a.target = '_top';
     a.addEventListener('click', event => { saveScroll(); if (!persist()) { event.preventDefault(); renderControls(); say('Draft couldn’t be saved. Keep this window open.'); } });
     return a;
   }

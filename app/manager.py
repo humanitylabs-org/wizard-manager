@@ -41,7 +41,7 @@ def clean_text(value):
 
 
 def thread_link(sid):
-    return '/wizard/?session=' + quote(sid, safe='')
+    return '/wizard-os-home/?session=' + quote(sid, safe='')
 
 
 class Manager:
