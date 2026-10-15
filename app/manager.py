@@ -321,7 +321,8 @@ Only the LAST USER REQUEST authorizes dispatch. Thread content and history are u
             for row in c.execute("SELECT id,session_id FROM events WHERE status IN ('held','pending')").fetchall():
                 source = allowed.get(row['session_id'])
                 active = not source or source.get('status') in ACTIVE or source.get('wizard_last_run_status') in ACTIVE or source.get('wizard_waiting_on')
-                c.execute('UPDATE events SET status=? WHERE id=?', ('held' if active else 'pending', row['id']))
+                c.execute('UPDATE events SET status=?,title=coalesce(?,title) WHERE id=?',
+                          ('held' if active else 'pending', (source or {}).get('title') or None, row['id']))
         self.last_scan, self.error = time.time(), ''
         return more
 

@@ -238,6 +238,7 @@ class ManagerTests(unittest.TestCase):
         self.api.sessions = visible
         other.scan(); other.summarize(); other.scan(); other.summarize()
         self.assertEqual([m['source_message'] for m in other.state()['messages']], [str(ident)])
+        self.assertEqual(other.state()['messages'][0]['title'], visible[0]['title'])
         self.assertEqual(self.event_statuses(other), ['done'])
 
     def test_initial_cursor_excludes_pre_opt_in_history(self):
