@@ -6,6 +6,7 @@ WAS supplies the allowlist of visible ordinary-agent session IDs. No writes,
 private agent stores, profiles, credentials or tool payloads are opened.
 """
 import json
+import hashlib
 import re
 import sqlite3
 from contextlib import closing
@@ -39,6 +40,8 @@ def attention(text):
 class ReadySource:
     def __init__(self, path):
         self.path = Path(path).resolve(strict=True)
+        with closing(self.open()) as c:
+            self.has_uid = 'message_uid' in {r[1] for r in c.execute('PRAGMA table_info(messages)')}
 
     def open(self):
         conn = sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True, timeout=5)
@@ -53,7 +56,8 @@ class ReadySource:
     def read(self, after, limit=1000):
         with closing(self.open()) as c:
             # ID is the canonical insertion order. Compacted rows deliberately included.
-            rows = c.execute('''SELECT m.id,m.session_id,m.role,m.content,m.timestamp,m.finish_reason,m.display_kind,m.tool_calls
+            uid_column = 'm.message_uid' if self.has_uid else 'NULL'
+            rows = c.execute(f'''SELECT {uid_column} AS message_uid,m.id,m.session_id,m.role,m.content,m.timestamp,m.finish_reason,m.display_kind,m.tool_calls
                                 FROM messages m JOIN sessions s ON s.id=m.session_id
                                 WHERE m.id>? AND m.role='assistant' AND s.parent_session_id IS NULL
                                   AND coalesce(s.hidden,0)=0 AND coalesce(s.archived,0)=0
@@ -68,6 +72,11 @@ class ReadySource:
                 continue
             value = attention(text)
             if value:
-                events.append({'id': r['id'], 'session_id': r['session_id'], 'body': MARKER.sub('', text).strip(),
+                identity = r['message_uid'] or hashlib.sha256(json.dumps([r['session_id'], r['timestamp'], text]).encode()).hexdigest()
+                first_id = r['id']
+                if r['message_uid']:
+                    with closing(self.open()) as c:
+                        first_id = c.execute('SELECT min(id) FROM messages WHERE session_id=? AND message_uid=?', (r['session_id'], r['message_uid'])).fetchone()[0]
+                events.append({'id': r['id'], 'identity': identity, 'first_id': first_id, 'session_id': r['session_id'], 'body': MARKER.sub('', text).strip(),
                                'attention': value, 'created': float(r['timestamp'] or 0)})
         return events, int(rows[-1]['id']) if rows else int(after), len(rows) == limit

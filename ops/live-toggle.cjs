@@ -1,0 +1,12 @@
+const { chromium }=require(process.env.PLAYWRIGHT_MODULE||'playwright');const assert=require('node:assert/strict');const fs=require('node:fs');
+(async()=>{
+const out=process.env.MANAGER_QA_OUT;fs.mkdirSync(out,{recursive:true});
+const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE,headless:true});const context=await browser.newContext({viewport:{width:412,height:915},isMobile:true,hasTouch:true});const page=await context.newPage();
+await page.goto(process.env.MANAGER_PUBLIC_ORIGIN+'/wizard-os-home/?shell=phone&open=wizard-manager');await page.waitForTimeout(1800);const f=page.frames().find(x=>x.url().includes('/wizard-manager/'));assert(f);
+await f.locator('#options-open').click();await f.locator('#enabled[aria-checked="true"]').waitFor();await f.locator('#enabled').click();await f.locator('#enabled[aria-checked="false"]').waitFor();
+const state=()=>f.evaluate(async()=>{const r=await fetch('api/state');return r.json()});
+await page.waitForTimeout(2000);const paused=await state();assert.equal(paused.enabled,false);await page.waitForTimeout(13500);const still=await state();assert.equal(still.enabled,false);assert.equal(still.model_calls,paused.model_calls,'no new model call while disabled');
+await f.locator('#enabled').click();await f.locator('#enabled[aria-checked="true"]').waitFor();await f.locator('#options-close').click();await page.waitForTimeout(1500);const active=await state();assert.equal(active.enabled,true);assert.equal(active.jobs.length,0);assert.equal(active.monitor.error,'');
+await page.screenshot({path:out+'/enabled-phone.png'});await page.reload();await page.waitForTimeout(2000);const f2=page.frames().find(x=>x.url().includes('/wizard-manager/'));assert(f2);const readback=await f2.evaluate(async()=>{const r=await fetch('api/state');return r.json()});assert(readback.enabled);assert(readback.messages.every(m=>!m.source_id?.includes('wizard_manager_2314d9faefd18768861435b9')));
+const receipt={enabled:readback.enabled,model:readback.model,monitor:readback.monitor,retained_messages:readback.messages.length,pause_model_calls_before:paused.model_calls,pause_model_calls_after:still.model_calls,qa_removed:true,launcher_entry:page.url()};fs.writeFileSync(out+'/enabled-receipt.json',JSON.stringify(receipt,null,2));console.log(JSON.stringify(receipt,null,2));await browser.close();
+})().catch(e=>{console.error(e);process.exit(1)});

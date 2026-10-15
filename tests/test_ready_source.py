@@ -32,7 +32,7 @@ class ReadySourceTests(unittest.TestCase):
                     id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
                     role TEXT NOT NULL, content TEXT, timestamp REAL,
                     finish_reason TEXT, display_kind TEXT, tool_calls TEXT,
-                    compacted INTEGER DEFAULT 0
+                    compacted INTEGER DEFAULT 0, message_uid TEXT
                 );
                 INSERT INTO sessions(id) VALUES ('wizard_fixture');
             ''')
@@ -163,13 +163,15 @@ class ReadySourceTests(unittest.TestCase):
             if '/api/sessions?' in url:
                 return {'data': list(sessions), 'has_more': False}
             raise AssertionError('Unexpected external request: ' + url)
+        self.row(content=tagged('Old pre-opt-in result.'), message_uid='old-logical')
         manager = Manager(self.path.parent / 'manager', was='http://was', model_url='http://model',
                           key='fixture-only', request=api, ready_source=self.source)
+        self.row(content=tagged('Old pre-opt-in result.'), message_uid='old-logical')
         self.row(content='Historical helper handoff, no status marker.')
         self.row(display_kind='hidden')
         self.session('child', parent_session_id='wizard_fixture')
         self.row(session_id='child')
-        good = self.row(content=tagged('Reviewable result.', state='check', ask='Review it'), compacted=1)
+        good = self.row(content=tagged('Reviewable result.', state='check', ask='Review it'), compacted=1, message_uid='live-logical')
         manager.scan()
         self.assertFalse(manager.summarize())
         self.assertEqual(manager.setting('ready_cursor'), good)
@@ -187,6 +189,19 @@ class ReadySourceTests(unittest.TestCase):
         evidence = json.loads(model_calls[0]['messages'][-1]['content'])
         self.assertEqual(evidence['response'], 'Reviewable result.')
         self.assertNotIn('WIZARD_STATUS_V1', evidence['response'])
+        # Hermes can rewrite retained history with new insertion IDs but stable UIDs.
+        self.row(content=tagged('Reviewable result.', state='check', ask='Review it'), message_uid='live-logical')
+        manager.scan(); manager.summarize()
+        self.assertEqual(len(manager.state()['messages']), 1, 'compaction must not notify twice')
+
+    def test_logical_identity_survives_history_reinsertion(self):
+        first = self.row(message_uid='stable-logical', compacted=1)
+        second = self.row(message_uid='stable-logical')
+        rows, cursor, _ = self.source.read(first)
+        self.assertEqual(rows[0]['id'], second)
+        self.assertEqual(rows[0]['first_id'], first)
+        self.assertEqual(rows[0]['identity'], 'stable-logical')
+        self.assertEqual(cursor, second)
 
     def test_attention_rejects_invalid_metadata_and_uses_last_valid_marker(self):
         for text in ('', 'Done.', '[WIZARD_STATUS_V1][][/WIZARD_STATUS_V1]',

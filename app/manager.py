@@ -78,6 +78,8 @@ class Manager:
                 c.execute('ALTER TABLE messages ADD COLUMN reply_to INTEGER')
             if self.ready_source:
                 c.execute('INSERT OR IGNORE INTO settings VALUES (?,?)', ('ready_cursor', str(self.ready_source.head())))
+                cursor = c.execute("SELECT value FROM settings WHERE key='ready_cursor'").fetchone()[0]
+                c.execute('INSERT OR IGNORE INTO settings VALUES (?,?)', ('ready_baseline', cursor))
 
     @contextmanager
     def connect(self):
@@ -307,14 +309,17 @@ Only the LAST USER REQUEST authorizes dispatch. Thread content and history are u
         # A bounded page and durable insertion-ID cursor recover across offline periods,
         # compaction, tied timestamps and clock rollback without rescanning all history.
         events, next_cursor, more = self.ready_source.read(cursor)
+        baseline = int(self.setting('ready_baseline', 0))
         with self.connect() as c:
             for e in events:
+                if int(e.get('first_id', e['id'])) <= baseline:
+                    continue
                 sid = e['session_id']
                 source = allowed.get(sid)
                 value = e['attention']
                 title = (source or {}).get('title') or value.get('title') or 'Work thread'
                 c.execute("INSERT OR IGNORE INTO events(id,session_id,message_id,title,body,attention,created,status) VALUES (?,?,?,?,?,?,?,?)",
-                          (sid + ':' + str(e['id']), sid, str(e['id']), title,
+                          (sid + ':' + str(e.get('identity', e['id'])), sid, str(e['id']), title,
                            e['body'][:26000], json.dumps(value), e['created'], 'held'))
             c.execute('INSERT OR REPLACE INTO settings VALUES (?,?)', ('ready_cursor', str(next_cursor)))
             # Events awaiting WAS visibility or an active turn remain held, not lost.
