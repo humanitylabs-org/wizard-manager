@@ -1,0 +1,6 @@
+{
+  "request": "A separate optional Archimedes Manager conversation using DeepSeek Flash, delegating through WAS and summarising every new Ready response, alongside unchanged Chats",
+  "template": "hello-wizard",
+  "state": "local_draft",
+  "name": "Manager"
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" data-app="wizard-manager">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>Habits</title>
+  <script src="boot.js"></script>
+  <link rel="stylesheet" href="wizard-ui.css">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="/wizard-os-home/core/app-client.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="wz-app">
+    <header class="wz-head"><h1>Habits</h1><p id="day"></p></header>
+    <main class="wz-scroll">
+      <section class="wz-sec" aria-labelledby="today-h">
+        <h2 class="wz-sec-h" id="today-h">Today <small id="day-short"></small><span id="count" class="wz-count" hidden></span></h2>
+        <div class="habit-progress" id="progress" hidden><i></i></div>
+        <ul id="habits" class="wz-list" aria-label="Your habits"></ul>
+        <div id="empty" class="wz-empty" hidden>
+          <div class="wz-tile" aria-hidden="true">✓</div>
+          <strong>No habits yet</strong>
+          <p>Add one below, then tap it each day you do it.</p>
+        </div>
+      </section>
+    </main>
+    <p id="status" class="wz-status" role="status" aria-live="polite"></p>
+    <form id="add-form" class="wz-compose" autocomplete="off">
+      <input id="habit-name" class="wz-input" aria-label="New habit" placeholder="New habit, e.g. Drink water" maxlength="60" enterkeyhint="done" required>
+      <button id="add" class="wz-send" type="submit" aria-label="Add habit" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </form>
+  </div>
+</body>
+</html>

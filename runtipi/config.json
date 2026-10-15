@@ -1,0 +1,29 @@
+{
+  "name": "Manager",
+  "id": "wizard-manager",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Reference app with a daily habit list, documented HTTP API, MCP and editable view source.",
+  "author": "Humanity Labs",
+  "port": 8799,
+  "categories": [
+    "utilities"
+  ],
+  "description": "Daily habits through a documented API, MCP and vanilla view.",
+  "tipi_version": 1,
+  "version": "0.2.0",
+  "source": "https://github.com/owner/wizard-manager",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791500000000,
+  "updated_at": 1791500000000,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [],
+  "no_gui": false
+}

@@ -1,0 +1,3 @@
+/* Habit-specific styles only. Everything shared (type, rows, composer, colours) comes from wizard-ui.css. */
+.habit-progress { height: 3px; margin: 0 8px 6px; border-radius: 2px; background: var(--fill); overflow: hidden; }
+.habit-progress i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--accent); transition: width 260ms var(--ease); }

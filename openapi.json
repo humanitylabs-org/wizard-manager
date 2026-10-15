@@ -1,0 +1,179 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Hello Wizard habits and diagnostics",
+    "version": "0.2.0"
+  },
+  "paths": {
+    "/api/habits": {
+      "get": {
+        "summary": "List habits and server ISO day",
+        "responses": {
+          "200": {
+            "description": "{day, habits:[{id,name,done}]}"
+          },
+          "400": {
+            "description": "Invalid day"
+          }
+        },
+        "parameters": [
+          {
+            "name": "day",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Owner's local date; defaults to the box's UTC date. Must be within a day of UTC."
+          }
+        ]
+      },
+      "post": {
+        "summary": "Add a habit",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
+                  },
+                  "day": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "Owner's local date (YYYY-MM-DD)."
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Updated list"
+          },
+          "400": {
+            "description": "Invalid name"
+          },
+          "409": {
+            "description": "Duplicate name"
+          }
+        }
+      }
+    },
+    "/api/habits/{id}/today": {
+      "post": {
+        "summary": "Idempotently mark or undo today",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "done": {
+                    "type": "boolean"
+                  },
+                  "day": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "Owner's local date (YYYY-MM-DD)."
+                  }
+                },
+                "required": [
+                  "done"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated list"
+          },
+          "400": {
+            "description": "Invalid boolean"
+          },
+          "404": {
+            "description": "No such habit"
+          }
+        }
+      }
+    },
+    "/api/time": {
+      "get": {
+        "summary": "Current UTC time",
+        "responses": {
+          "200": {
+            "description": "{utc: ISO UTC timestamp}"
+          }
+        }
+      }
+    },
+    "/api/echo": {
+      "post": {
+        "summary": "Echo text",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{text}"
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Health and app version",
+        "responses": {
+          "200": {
+            "description": "{ok,app,version}"
+          }
+        }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "summary": "Stateless streamable HTTP JSON-RPC MCP; initialize, tools/list, tools/call, ping",
+        "responses": {
+          "200": {
+            "description": "JSON-RPC response"
+          },
+          "202": {
+            "description": "Notification acknowledged"
+          }
+        }
+      }
+    }
+  }
+}
