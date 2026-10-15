@@ -122,6 +122,49 @@ class ManagerTests(unittest.TestCase):
         with (manager or self.m).connect() as c:
             return [r[0] for r in c.execute('SELECT status FROM events ORDER BY rowid')]
 
+    def test_thread_inventory_uses_visible_canonical_snapshot_without_history_mutation(self):
+        self.api.sessions = [
+            {'id': 'visible/one', 'title': 'Wizard OS · Share files'},
+            {'id': 'hidden', 'title': 'Secret thread', 'hidden': True},
+            {'id': 'archived', 'title': 'Old thread', 'archived': True},
+            {'id': 'private', 'title': 'Private thread', 'agent': {'id': 'private'}},
+            {'id': 'child', 'title': 'Child thread', 'parent_session_id': 'visible/one'}]
+        self.send('Share files'); self.m.process_job()
+        before = self.m.state()['messages']
+        self.m.sessions(fresh=True)
+        calls = len(self.api.calls)
+        state = self.m.state()
+        self.assertEqual(state['threads'], [{'id': 'visible/one', 'title': 'Wizard OS · Share files', 'aliases': []}])
+        self.assertEqual(state['messages'], before)
+        self.assertEqual(len(self.api.calls), calls, 'display projection must not call a provider')
+        self.assertEqual(self.m.state(after=state['messages'][-1]['id'])['threads'], state['threads'])
+        self.m.cache_at = time.time() - 46
+        self.assertEqual(self.m.state()['threads'], [], 'stale inventory cannot authorize a new link')
+        self.api.sessions = []
+        self.m.sessions(fresh=True)
+        self.assertEqual(self.m.state()['threads'], [])
+
+    def test_observed_title_survives_rename_and_restart_but_not_visibility_removal(self):
+        self.api.sessions = [{'id': 'same-id', 'title': 'Original thread title'}]
+        self.m.sessions(fresh=True)
+        self.api.sessions[0]['title'] = 'Renamed work'
+        other = self.manager()
+        other.sessions(fresh=True)
+        self.assertEqual(other.state()['threads'], [{'id': 'same-id', 'title': 'Renamed work', 'aliases': ['Original thread title']}])
+        self.api.sessions = [{'id': 'same-id', 'title': 'Renamed work', 'hidden': True}]
+        other.sessions(fresh=True)
+        self.assertEqual(other.state()['threads'], [])
+
+    def test_model_receives_canonical_urls_and_every_named_thread_contract(self):
+        self.api.sessions = [{'id': 'fixture/one', 'title': 'First work'}, {'id': 'fixture-two', 'title': 'Second work'}]
+        self.m.sessions(fresh=True)
+        self.send('What is happening?'); self.m.process_job()
+        request = next(c[1] for c in self.api.calls if c[0] == 'http://model')
+        self.assertIn('Link every named thread', request['messages'][0]['content'])
+        self.assertNotIn('No markdown links', request['messages'][0]['content'])
+        work = json.loads(request['messages'][1]['content'])['work']
+        self.assertEqual([s['url'] for s in work], ['/wizard-os-home/?session=fixture%2Fone', '/wizard-os-home/?session=fixture-two'])
+
     def test_reply_persists(self):
         self.send()
         self.m.process_job()
