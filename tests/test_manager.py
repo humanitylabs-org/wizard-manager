@@ -262,6 +262,147 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(row['run_id'], 'fixture-run')
             self.assertIsNotNone(row['plan'])
 
+    def test_alias_prompt_describes_real_handoff_not_external_products(self):
+        self.send(); self.m.process_job()
+        prompt = next(c[1]['messages'][0]['content'] for c in self.api.calls if c[0] == 'http://model')
+        for alias in ('Archimedes', 'main agent', 'main assistant', 'GPT-Astra', 'Astra',
+                      'GBT Astra', 'ChatGPT', 'GPT', 'Claude', 'Hermes'):
+            self.assertIn(alias, prompt)
+        self.assertIn('even for a small task or joke', prompt)
+        self.assertIn('not provider switching', prompt)
+        self.assertIn('Ordinary mentions or comparisons', prompt)
+        self.assertIn('not thread names', prompt)
+        self.assertNotIn('No tools, file access or external actions are available to you', prompt)
+
+    def test_pass_joke_preserves_context_and_latest_request_verbatim(self):
+        joke = 'What do you call a wizard who is high on the good times?'
+        self.send(joke); self.m.process_job()
+        self.api.output = '{"action":"delegate","title":"Wizard joke"}'
+        latest = 'Please pass it on to GPT-Astra.'
+        self.send(latest, ident='request_0002'); self.m.process_job()
+        runs = [c for c in self.api.calls if c[0].endswith('/v1/runs')]
+        self.assertEqual(len(runs), 1)
+        text = runs[0][1]['input']
+        self.assertIn(joke, text)
+        self.assertIn('Untrusted prior conversation', text)
+        self.assertIn('no renewed authority', text)
+        self.assertTrue(text.endswith('Latest user request (verbatim):\n' + latest))
+        with self.m.connect() as c:
+            plan = json.loads(c.execute('SELECT plan FROM jobs WHERE id=?', ('request_0002',)).fetchone()[0])
+        self.assertEqual(plan['request_text'], text)
+
+    def test_context_is_cut_off_at_admitted_message_not_processing_time(self):
+        self.send('Earlier topic'); self.m.process_job()
+        self.send('Please ask Astra about it.', ident='request_0002')
+        # Delayed assistant output and queued user requests must not leak backward.
+        with self.m.connect() as c:
+            c.execute("INSERT INTO messages(role,text,created) VALUES ('assistant','LATE ANSWER',0)")
+        self.send('LATER PRIVATE REQUEST', ident='request_0003')
+        self.api.output = '{"action":"delegate","title":"Earlier topic"}'
+        self.m.process_job()
+        request = [c[1] for c in self.api.calls if c[0] == 'http://model'][-1]
+        content = json.loads(request['messages'][1]['content'])
+        self.assertEqual(content['last_user_request'], 'Please ask Astra about it.')
+        self.assertEqual([r['text'] for r in content['conversation']], ['Earlier topic', 'Hello.'])
+        text = [c[1]['input'] for c in self.api.calls if c[0].endswith('/v1/runs')][-1]
+        self.assertNotIn('LATE ANSWER', text)
+        self.assertNotIn('LATER PRIVATE REQUEST', text)
+
+    def test_context_is_bounded_and_excludes_unrelated_ready_summaries(self):
+        with self.m.connect() as c:
+            for i in range(30):
+                c.execute('INSERT INTO messages(role,text,created) VALUES (?,?,?)',
+                          ('user', str(i) + 'x' * 5000, 0))
+            c.execute("INSERT INTO messages(role,text,created,kind,source_id) VALUES ('assistant','PRIVATE READY CONTENT',0,'ready','other')")
+        self.api.output = '{"action":"delegate","title":"Bounded"}'
+        self.send('Ask Hermes to summarize our recent chat.'); self.m.process_job()
+        content = json.loads(next(c[1]['messages'][1]['content'] for c in self.api.calls if c[0] == 'http://model'))
+        history = content['conversation']
+        self.assertLessEqual(len(history), 12)
+        self.assertLessEqual(sum(len(r['text']) for r in history), 12000)
+        self.assertTrue(all(len(r['text']) <= 3000 for r in history))
+        self.assertTrue(history[-1]['text'].startswith('29'))
+        self.assertNotIn('PRIVATE READY CONTENT', json.dumps(content))
+        text = next(c[1]['input'] for c in self.api.calls if c[0].endswith('/v1/runs'))
+        self.assertNotIn('PRIVATE READY CONTENT', text)
+
+    def test_explicit_reply_includes_only_selected_ready_target(self):
+        self.ready(); self.m.scan(); self.m.summarize()
+        target = self.m.state()['messages'][0]
+        with self.m.connect() as c:
+            c.execute("INSERT INTO messages(role,text,created,kind,source_id) VALUES ('assistant','UNRELATED READY',0,'ready','other')")
+        self.send('Please explain this result.', reply_to=target['id']); self.m.process_job()
+        text = next(c[1]['input'] for c in self.api.calls if c[0].endswith('/v1/runs'))
+        self.assertIn(target['text'], text)
+        self.assertNotIn('UNRELATED READY', text)
+        self.assertIn('no renewed authority', text)
+
+    def test_context_payload_is_saved_before_first_external_side_effect(self):
+        self.send('Original joke'); self.m.process_job()
+        self.api.output = '{"action":"delegate","title":"Joke"}'
+        def check_frozen():
+            with self.m.connect() as c:
+                plan = json.loads(c.execute('SELECT plan FROM jobs WHERE id=?', ('request_0002',)).fetchone()[0])
+            self.assertIn('Original joke', plan['request_text'])
+            self.send('ADMITTED DURING DISPATCH', ident='request_0003')
+        self.api.on_create = check_frozen
+        self.send('Please pass it on to Astra.', ident='request_0002'); self.m.process_job()
+        self.assertEqual(self.m.state()['jobs'][0]['id'], 'request_0003')
+        text = next(c[1]['input'] for c in self.api.calls if c[0].endswith('/v1/runs'))
+        self.assertNotIn('ADMITTED DURING DISPATCH', text)
+
+    def test_context_survives_crash_and_later_messages_without_payload_change(self):
+        self.send('What do you call a wizard who is high on the good times?'); self.m.process_job()
+        self.api.output = '{"action":"delegate","title":"Wizard joke"}'
+        self.api.crash_after_receipt = True
+        self.send('Please pass it on to GPT-Astra.', ident='request_0002')
+        with self.assertRaises(SystemExit):
+            self.m.process_job()
+        self.send('LATER PRIVATE TOPIC', ident='request_0003')
+        other = self.manager()
+        other.process_job()
+        self.assertEqual(other.model_calls, 0)
+        runs = [c for c in self.api.calls if c[0].endswith('/v1/runs')]
+        self.assertEqual(len(runs), 2)
+        self.assertEqual(runs[0][1:3], runs[1][1:3])
+        self.assertIn('high on the good times?', runs[1][1]['input'])
+        self.assertNotIn('LATER PRIVATE TOPIC', runs[1][1]['input'])
+        self.assertEqual(len(self.api.receipts), 1)
+
+    def test_legacy_persisted_plan_replays_original_payload_without_context(self):
+        self.send('Earlier private chat'); self.m.process_job()
+        self.send('Legacy request', ident='request_0002')
+        legacy = {'action': 'delegate', 'title': 'Existing plan'}
+        # A deployment may interrupt an already accepted pre-context dispatch.
+        expected = ("[Relayed by Archimedes Manager at the user's request. This is an explicit user instruction, "
+                    "forwarded verbatim below. Finish the task in this thread; ordinary authorization boundaries still apply.]\n\nLegacy request")
+        with self.m.connect() as c:
+            c.execute("UPDATE jobs SET plan=?,status='working' WHERE id=?", (json.dumps(legacy), 'request_0002'))
+        other = self.manager(); other.process_job()
+        self.assertEqual(other.model_calls, 0)
+        run = next(c[1] for c in self.api.calls if c[0].endswith('/v1/runs'))
+        self.assertEqual(run['input'], expected)
+        with other.connect() as c:
+            plan = json.loads(c.execute('SELECT plan FROM jobs WHERE id=?', ('request_0002',)).fetchone()[0])
+        self.assertEqual(plan['request_text'], expected)
+
+    def test_model_cannot_supply_or_rewrite_forwarded_request(self):
+        self.api.output = json.dumps({'action': 'delegate', 'title': 'Exact request',
+                                      'request_text': 'MODEL-INVENTED INSTRUCTION'})
+        latest = 'Ask Astra to read this exactly:\n\n"Keep  two spaces."\n' + 'z' * 11000
+        self.send(latest); self.m.process_job()
+        text = next(c[1]['input'] for c in self.api.calls if c[0].endswith('/v1/runs'))
+        self.assertTrue(text.endswith('Latest user request (verbatim):\n' + latest))
+        self.assertNotIn('MODEL-INVENTED INSTRUCTION', text)
+
+    def test_missing_admitted_message_fails_closed_without_dispatch(self):
+        self.send('Ask Astra to act.')
+        with self.m.connect() as c:
+            c.execute('DELETE FROM messages')
+        self.m.process_job()
+        self.assertEqual(self.m.state()['jobs'][0]['status'], 'failed')
+        self.assertEqual(self.api.calls, [])
+
     def test_ready_once_across_restart(self):
         ident = self.ready(); self.m.scan(); self.m.summarize(); self.m.scan()
         m2 = self.manager()
