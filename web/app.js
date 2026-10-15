@@ -415,6 +415,26 @@
   restore(); input.value = draft.text;
   $('header-portrait').append(portrait()); $('empty-portrait').append(portrait(true));
   if (core) {
+    // The host owns the recording/request journal. Capture reply_to at recording
+    // start; subsequent draft edits never retarget or get consumed by an orb send.
+    core.conversation?.register({
+      snapshot: () => ({ replyTo: draft.target?.reply_to ?? null, label: draft.target ? 'Manager · reply in ' + draft.target.title : 'Manager conversation' }),
+      async receive({ request_id, text, target }, authorize) {
+        if (!/^[A-Za-z0-9_-]{8,100}$/.test(request_id || '') || typeof text !== 'string' || !text.trim() || text.length > 12000 || !target || (target.replyTo !== null && (!Number.isSafeInteger(target.replyTo) || target.replyTo <= 0))) throw new Error('Invalid Manager conversation message');
+        await refresh();
+        // Reconcile first: a lost acknowledgement must not duplicate an accepted turn.
+        const accepted = () => [...messages.values()].some(m => m.role === 'user' && m.job_id === 'user:' + request_id && m.text === text);
+        if (accepted()) return { accepted: true, request_id };
+        if (!canOperate()) throw new Error('Manager paused or offline · nothing sent');
+        authorize(); // revalidate pinned live document AFTER async state read, immediately before POST
+        const receipt = await api('api/messages', { text, request_id, ...(target.replyTo === null ? {} : { reply_to: target.replyTo }) });
+        if (receipt.accepted !== true || receipt.request_id !== request_id) throw new Error('Manager admission uncertain');
+        if (refreshing) await refreshing;
+        if (!await refresh() || !accepted()) throw new Error('Manager readback uncertain · retry original');
+        say('Voice message received in Manager.');
+        return { accepted: true, request_id };
+      },
+    });
     core.back.register({ canGoBack: () => !!draft.target, back: () => { if (!draft.target) return false; clearTarget(); return true; } });
     core.ready({ name: 'wizard-manager', version: '0.2.0' }).then(() => {
       document.documentElement.classList.toggle('wz-hosted', core.hosted);
