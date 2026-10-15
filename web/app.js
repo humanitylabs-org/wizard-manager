@@ -136,7 +136,8 @@
   }
   function source(m) { return typeof m.source_id === 'string' && m.source_id.trim() && m.source_id.length < 2048 && m.source_available !== false; }
   function link(m, label = 'Open thread') {
-    const a = element('a', '', label); a.href = '/wizard-os-home/?session=' + encodeURIComponent(m.source_id); a.target = '_top';
+    const a = element('a', '', label); a.href = '/wizard-os-home/?session=' + encodeURIComponent(m.source_id);
+ a.dataset.wizardNativeThread = m.source_id; a.target = '_top';
     a.addEventListener('click', event => {
       if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault(); saveScroll();
@@ -144,6 +145,7 @@
       try {
         if (core?.nav?.openThread(m.source_id)) { observeRead(); return; }
       } catch (_) {}
+      if (!core?.hosted) { location.assign(a.href); return; }
       say('Open Manager in the updated Wizard shell to read this thread here.');
     });
     return a;

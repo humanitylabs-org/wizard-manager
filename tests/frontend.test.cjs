@@ -17,7 +17,7 @@ const ready = (id, title = 'Research notes', extra = {}) => ({ id, role: 'assist
 const user = (id, request, text = 'Hello') => ({ id, role: 'user', kind: 'chat', job_id: 'user:' + request, text, created: stamp });
 const answer = (id, request, text = 'Hello. What would you like to work on?') => ({ id, role: 'assistant', kind: 'chat', job_id: 'answer:' + request, text, created: stamp });
 const fixtureHost = `<!doctype html><html><body style="margin:0"><button id="back" onclick="window.domain.back()">Host Back</button><iframe title="Manager fixture" src="/index.html" style="border:0;width:100%;height:calc(100vh - 30px)"></iframe><script>
-window.holds=0;window.WizAppServices={connect:(frame,domain)=>{window.domain=domain;return{ready:()=>({version:1,hosted:true}),update:{hold:()=>{window.holds++;let released=false;return{release:()=>{if(!released){released=true;window.holds--;}}}}}}}};
+window.holds=0;window.WizAppServices={connect:(frame,domain)=>{window.domain=domain;return{ready:()=>({version:1,hosted:true}),view:{isVisible:()=>!window.qaHidden},nav:{openThread:id=>{window.openedThread=id;return true;}},update:{hold:()=>{window.holds++;let released=false;return{release:()=>{if(!released){released=true;window.holds--;}}}}}}}};
 </script></body></html>`;
 before(async () => {
   assert.ok(process.env.CORE_CLIENT, 'CORE_CLIENT must point to the real shared core source');
@@ -94,7 +94,8 @@ test('inline named links update historical display only; safe anchors retain dra
   f.state.threads = threads; await f.poll();
   await f.context.route('**/wizard-os-home/?session=*', route => route.fulfill({contentType: 'text/html', body: '<h1>Isolated destination</h1>'}));
   await links.nth(1).click();
-  await f.page.waitForURL('**/wizard-os-home/?session=thread%2Ftwo');
+  assert.equal(await f.page.evaluate(() => openedThread), 'thread/two');
+  assert.match(f.page.url(), /\/host$/);
   assert.equal(await f.page.evaluate(() => JSON.parse(localStorage.getItem('wizard-manager:conversation:v1')).text), before.text);
   assert.equal(f.posts.length, 0);
 });
@@ -303,7 +304,7 @@ test('all five appearance fixtures preserve draft, target, message identity, sel
 test('pagination drains beyond 1000 messages before validating restored reply target', async t => {
   const history = Array.from({ length: 1001 }, (_, i) => ready(i + 1));
   const f = await setup(t, { state: { messages: history }, init: () => localStorage.setItem('wizard-manager:conversation:v1', JSON.stringify({ rev: 1, text: 'Reply to oldest page edge', target: { reply_to: 1001, source_id: 'thread/1001', source_message: 'response-1001', title: 'Research notes' } })) });
-  await f.frame.waitForFunction(() => document.querySelectorAll('#thread > li').length === 1001);
+  await f.frame.waitForFunction(() => document.querySelectorAll('#thread > li[data-message-id]').length === 1001);
   assert.equal(await f.frame.locator('#send').isEnabled(), true); assert.doesNotMatch(await f.frame.locator('#destination').textContent(), /Can’t reply/);
   assert.equal(await f.frame.locator('#announcer').textContent(), '', 'initial inventory must not replay announcements');
 });
@@ -376,7 +377,7 @@ test('reading anchor and offset restore after reload without new-history announc
   const f = await setup(t, { state: { messages: Array.from({ length: 18 }, (_, i) => ready(i + 1)) } });
   await f.frame.locator('#conversation').evaluate(n => { n.scrollTop = 350; }); await f.page.waitForTimeout(100);
   const previous = await f.draft(); assert.equal(previous.scroll.pinned, false);
-  await f.page.reload(); await f.frame.waitForFunction(() => document.querySelectorAll('#thread > li').length === 18);
+  await f.page.reload(); await f.frame.waitForFunction(() => document.querySelectorAll('#thread > li[data-message-id]').length === 18);
   await f.page.waitForTimeout(100);
   assert.ok(Math.abs(await f.frame.locator('#conversation').evaluate(n => n.scrollTop) - 350) <= 2);
   assert.equal(await f.frame.locator('#announcer').textContent(), '');
@@ -395,6 +396,50 @@ test('orb receiver seals reply target and leaves later draft intact', async t =>
   assert.equal((await f.draft()).target.reply_to, 2);
   await f.page.evaluate(target => domain.conversation.receive({ request_id: 'qa-orb-original', text: 'Voice original', target }, () => {}), target);
   assert.equal(f.posts.filter(p => p.path === '/api/messages').length, 1);
+});
+
+test('hosted source links save Manager draft and request the exact native canonical ID', async t => {
+  const f = await setup(t, { hosted: true, state: { messages: [ready(1)] } });
+  await f.frame.locator('#message').fill('Keep this draft');
+  await f.frame.locator('[data-message-id="1"] a').click();
+  assert.equal(await f.page.evaluate(() => openedThread), 'thread/1');
+  assert.equal((await f.draft()).text, 'Keep this draft');
+  assert.match(f.page.url(), /\/host$/);
+  assert.equal(await f.frame.locator('#message').inputValue(), 'Keep this draft');
+});
+
+test('read watermark advances only after visibility; away arrivals start a persistent catch-up boundary', async t => {
+  const f = await setup(t, { hosted: true, state: { messages: [answer(1, 'one')] } });
+  await f.frame.waitForFunction(() => JSON.parse(localStorage.getItem('wizard-manager:conversation:v1')).read.seen === 1);
+  assert.equal((await f.draft()).read.divider, 1, 'reading does not move the active boundary');
+  await f.page.evaluate(() => window.qaHidden = true); await f.page.waitForTimeout(350);
+  assert.equal((await f.draft()).read.divider, null, 'completed boundary retires on leaving');
+  f.state.messages.push(answer(2, 'two')); await f.poll(); await f.page.waitForTimeout(1000);
+  assert.equal((await f.draft()).read.seen, 1, 'fetch while hidden cannot read the arrival');
+  assert.equal((await f.draft()).read.divider, 2);
+  await f.frame.goto(origin + '/index.html'); await f.page.evaluate(() => window.qaHidden = false); await f.frame.waitForFunction(() => document.querySelector('[data-message-id="2"]'));
+  assert.equal((await f.draft()).read.divider, 2, 'reload retains first unread boundary');
+  await f.frame.waitForFunction(() => JSON.parse(localStorage.getItem('wizard-manager:conversation:v1')).read.seen === 2);
+  assert.equal((await f.draft()).read.divider, 2, 'new read receipt does not shift the divider');
+  f.state.messages.push(answer(3, 'three')); await f.poll();
+  assert.equal((await f.draft()).read.divider, 2, 'arrivals during catch-up retain the same line');
+});
+
+test('offscreen gaps are not read by jumping below them; catch-up anchor and receipts survive reload', async t => {
+  const f = await setup(t, { hosted: true, state: { messages: Array.from({length:12}, (_,i) => ready(i+1)) } });
+  await f.frame.locator('#conversation').evaluate(n => { n.scrollTop = n.scrollHeight; });
+  await f.page.waitForTimeout(1100);
+  const r = (await f.draft()).read;
+  assert.equal(r.seen, 0, 'unread gap blocks contiguous watermark');
+  assert.ok(r.viewed.includes(12), 'visible last message has a sparse read receipt');
+  assert.equal(r.divider, 1);
+  await f.page.evaluate(() => window.qaHidden = true); await f.page.waitForTimeout(300);
+  f.state.messages.push(ready(13)); await f.poll(); await f.page.waitForTimeout(850);
+  assert.deepEqual((await f.draft()).read, r, 'hidden fetch never advances read receipts');
+  await f.frame.goto(origin + '/index.html'); await f.page.evaluate(() => window.qaHidden = false); await f.frame.waitForFunction(() => document.querySelector('[data-message-id="13"]'));
+  assert.equal((await f.draft()).read.divider, 1);
+  assert.equal((await f.draft()).read.seen, 0);
+  assert.ok((await f.draft()).read.viewed.includes(12));
 });
 
 test('orb receiver rechecks pinned authorization after state read and before POST', async t => {
