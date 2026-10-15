@@ -13,7 +13,7 @@
   let newBelow = 0, pinned = true, scrollFrame = 0, retrying = new Set(), jobErrors = new Set();
   let restoring = true;
   // Seen receipts are separate from the stable catch-up boundary. Fetching never reads.
-  let read = { seen: 0, viewed: [], divider: null }, wasVisible = false;
+  let read = { seen: 0, viewed: [], divider: null }, wasVisible = false, returnAtEnd = false;
   const dwell = new Map();
   const divider = document.createElement('li'); divider.className = 'mgr-new-messages'; divider.textContent = 'New messages';
   divider.setAttribute('role', 'separator'); divider.setAttribute('aria-label', 'New messages');
@@ -27,21 +27,21 @@
     if (!node) divider.remove();
     scroller.scrollTop = top;
   }
-  function persistRead() { draft.read = { ...read, viewed: [...read.viewed] }; persist(); }
+  function persistRead() { draft.read = { ...read, version: 2, viewed: [...read.viewed] }; persist(); }
   function observeRead() {
     if (!loaded || restoring) return;
     const on = visible();
     if (!on) {
       dwell.clear();
       if (wasVisible) {
-        saveScroll();
+        returnAtEnd = draft.scroll?.pinned === true;
         // Retire a completed catch-up boundary only when leaving, never during polling.
         if (![...messages.values()].some(unread)) { read.divider = null; divider.remove(); }
         persistRead();
       }
       wasVisible = false; return;
     }
-    wasVisible = true;
+    if (!wasVisible) { wasVisible = true; void refresh(); }
     const bounds = scroller.getBoundingClientRect(), now = Date.now(); let changed = false;
     if (bounds.height <= 0 || $('options').open) { dwell.clear(); return; }
     for (const m of messages.values()) {
@@ -55,11 +55,9 @@
       if (now - dwell.get(m.id) >= 600) { read.viewed.push(m.id); dwell.delete(m.id); changed = true; }
     }
     if (changed) {
-      for (const m of [...messages.values()].sort((a,b) => a.id-b.id)) {
-        if (m.id <= read.seen) continue;
-        if (m.role === 'assistant' && !read.viewed.includes(m.id)) break;
-        read.seen = m.id;
-      }
+      // A reading position is a high-water mark, as in a messenger. Older history
+      // above the messages actually read must not pin the next-visit divider forever.
+      read.seen = Math.max(read.seen, ...read.viewed);
       read.viewed = read.viewed.filter(id => id > read.seen);
       persistRead();
     }
@@ -82,6 +80,13 @@
         viewed: Array.isArray(d.read.viewed) ? d.read.viewed.filter(id => Number.isSafeInteger(id) && id > d.read.seen) : [],
         divider: Number.isSafeInteger(d.read.divider) && d.read.divider > 0 ? d.read.divider : null,
       };
+      // Migrate the previous gap-based receipts, which could strand the boundary
+      // in old history even after the reader had caught up at the bottom.
+      if (d.read?.version !== 2) {
+        read.seen = Math.max(read.seen, ...read.viewed);
+        read.viewed = [];
+        if (read.divider && read.divider <= read.seen) read.divider = null;
+      }
       if (draft.sending && draft.sending.state !== 'rejected') draft.sending.state = 'uncertain';
     } catch (_) {
       saved = false;
@@ -297,6 +302,7 @@
     input.style.height = Math.min(input.scrollHeight, 156, Math.max(44, scroller.parentElement.clientHeight * .35)) + 'px';
   }
   function saveScroll() {
+    if (restoring || !visible() || scroller.getBoundingClientRect().height <= 0) return;
     const first = [...nodes.values()].find(node => node.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top);
     draft.scroll = { pinned, anchorMessageId: first ? Number(first.dataset.messageId) : null, offset: first ? first.getBoundingClientRect().top - scroller.getBoundingClientRect().top : 0 };
   }
@@ -323,12 +329,13 @@
   }
   function merge(data) {
     if (typeof data.enabled !== 'boolean' || !Array.isArray(data.messages) || !Array.isArray(data.jobs)) throw new Error('Invalid state');
+    const beforeTop = scroller.scrollTop;
     const nextKey = JSON.stringify(data.threads || []);
     if (nextKey !== inventoryKey) {
       inventoryKey = nextKey; resolveThreads = window.ManagerThreadLinks.resolver(data.threads);
       const top = scroller.scrollTop;
       for (const entry of richText.values()) updateText(entry);
-      scroller.scrollTop = pinned ? scroller.scrollHeight : top;
+      scroller.scrollTop = top;
     }
     const newMessages = [];
     for (const m of data.messages) {
@@ -347,11 +354,16 @@
     paintDivider(); persistRead();
     reconcileSubmission();
     if (loaded && newMessages.length) {
-      if (pinned && visible()) { scroller.scrollTop = scroller.scrollHeight; }
-      else { newBelow += newMessages.length; $('jump').textContent = newBelow + ' new below ↓'; $('jump').hidden = false; }
+      scroller.scrollTop = beforeTop;
+      if (returnAtEnd && visible() && read.divider && nodes.has(read.divider)) {
+        scroller.scrollTop += divider.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 80;
+      }
+      pinned = false;
+      newBelow += newMessages.length; $('jump').textContent = newBelow + ' new below ↓'; $('jump').hidden = false;
       const recent = newMessages.filter(m => m.role === 'assistant').at(-1);
       if (recent) say(recent.kind === 'ready' ? 'Ready: ' + (recent.title || 'Work thread') : 'Archimedes: ' + recent.text.slice(0, 180));
     }
+    if (visible()) { returnAtEnd = false; saveScroll(); persist(); }
   }
   async function refresh() {
     if (refreshing) return refreshing;
@@ -369,10 +381,11 @@
           restoring = false; resizeInput(); pinned = draft.scroll?.pinned !== false;
           const anchor = nodes.get(draft.scroll?.anchorMessageId);
           if (pinned && read.divider && nodes.has(read.divider)) {
-            scroller.scrollTop += divider.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+            scroller.scrollTop += divider.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 80;
             pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
-          } else if (pinned) scroller.scrollTop = scroller.scrollHeight;
-          else if (anchor) scroller.scrollTop += anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top - (Number(draft.scroll.offset) || 0);
+          } else if (anchor) scroller.scrollTop += anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top - (Number(draft.scroll.offset) || 0);
+          else if (pinned) scroller.scrollTop = scroller.scrollHeight;
+          saveScroll(); persist();
         }
         renderControls(); return true;
       } catch (_) { connected = false; connectionFailed = true; renderControls(); return false; }
@@ -466,7 +479,7 @@
     void submitSnapshot();
   };
   scroller.addEventListener('scroll', () => {
-    if (restoring) return;
+    if (restoring || !visible()) return;
     pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
     if (pinned) { newBelow = 0; $('jump').hidden = true; }
     if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; saveScroll(); persist(); });
@@ -476,12 +489,12 @@
   addEventListener('online', () => refresh());
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); else { saveScroll(); persist(); } });
   function viewport() {
-    const wasPinned = pinned;
+    const top = scroller.scrollTop;
     // Hosted height belongs to the containing window, never the outer visual viewport.
     if (!core?.hosted && !document.documentElement.classList.contains('wz-hosted') && !document.documentElement.hasAttribute('data-wz-hosted')) {
       document.querySelector('.mgr').style.height = (window.visualViewport?.height || innerHeight) + 'px';
     } else document.querySelector('.mgr').style.removeProperty('height');
-    resizeInput(); if (wasPinned && !restoring) scroller.scrollTop = scroller.scrollHeight;
+    resizeInput(); if (!restoring && visible()) scroller.scrollTop = top;
   }
   restore(); input.value = draft.text;
   $('header-portrait').append(portrait()); $('empty-portrait').append(portrait(true));
