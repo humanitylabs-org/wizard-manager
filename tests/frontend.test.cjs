@@ -326,3 +326,28 @@ test('reading anchor and offset restore after reload without new-history announc
   assert.ok(Math.abs(await f.frame.locator('#conversation').evaluate(n => n.scrollTop) - 350) <= 2);
   assert.equal(await f.frame.locator('#announcer').textContent(), '');
 });
+
+test('orb receiver seals reply target and leaves later draft intact', async t => {
+  const f = await setup(t, { hosted: true, state: { messages: [ready(1, 'First'), ready(2, 'Second')] } });
+  await f.frame.locator('[data-message-id="1"] button').click();
+  const target = await f.page.evaluate(() => domain.conversation.snapshot());
+  await f.frame.locator('[data-message-id="2"] button').click();
+  await f.frame.locator('#message').fill('Later draft');
+  const result = await f.page.evaluate(target => domain.conversation.receive({ request_id: 'qa-orb-original', text: 'Voice original', target }, () => {}), target);
+  assert.equal(result.accepted, true);
+  assert.equal(f.posts.at(-1).body.reply_to, 1);
+  assert.equal(await f.frame.locator('#message').inputValue(), 'Later draft');
+  assert.equal((await f.draft()).target.reply_to, 2);
+  await f.page.evaluate(target => domain.conversation.receive({ request_id: 'qa-orb-original', text: 'Voice original', target }, () => {}), target);
+  assert.equal(f.posts.filter(p => p.path === '/api/messages').length, 1);
+});
+
+test('orb receiver rechecks pinned authorization after state read and before POST', async t => {
+  const f = await setup(t, { hosted: true });
+  const error = await f.page.evaluate(async () => {
+    try { await domain.conversation.receive({request_id:'qa-orb-detached',text:'Keep me',target:{replyTo:null}}, () => { throw Error('frame detached'); }); }
+    catch (e) { return e.message; }
+  });
+  assert.equal(error, 'frame detached');
+  assert.equal(f.posts.length, 0);
+});
