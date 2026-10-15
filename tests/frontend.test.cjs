@@ -70,6 +70,61 @@ async function setup(t, options = {}) {
   const draft = () => frame.evaluate(() => JSON.parse(localStorage.getItem('wizard-manager:conversation:v1')));
   return { page, frame, context, state, posts, poll, draft, custom: fn => { custom = fn; } };
 }
+test('inline named links update historical display only; safe anchors retain draft and exact destinations', async t => {
+  const threads = [{id: 'thread/one', title: 'Wizard OS · Share files'}, {id: 'thread/two', title: 'Unify responsive features across desktop and mobile'}];
+  const text = 'Share files and Unify responsive features are running.';
+  const f = await setup(t, { hosted: true, state: { threads: [], messages: [answer(1, 'history', text), user(2, 'human', text), ready(3, 'Summary', {text})] } });
+  await f.frame.locator('#message').fill('Do not change my draft <>&');
+  await f.frame.evaluate(() => { window.savedTurn = document.querySelector('[data-message-id="1"]'); });
+  f.state.threads = threads; await f.poll();
+  const links = f.frame.locator('[data-message-id="1"] .mgr-text a');
+  assert.deepEqual(await links.evaluateAll(nodes => nodes.map(n => [n.textContent, n.getAttribute('href'), n.target])), [
+    ['Share files', '/wizard-os-home/?session=thread%2Fone', '_top'], ['Unify responsive features', '/wizard-os-home/?session=thread%2Ftwo', '_top']]);
+  assert.equal(await f.frame.locator('.mgr-summary a').count(), 2);
+  assert.equal(await f.frame.locator('.mgr-user a').count(), 0);
+  assert.equal(await f.frame.locator('.mgr-user .mgr-text').textContent(), text);
+  assert.equal(await f.frame.locator('[data-message-id="1"] .mgr-text').textContent(), text);
+  await f.frame.evaluate(() => { window.savedAnchor = document.querySelector('.mgr-text a'); });
+  await f.poll();
+  assert(await f.frame.evaluate(() => window.savedTurn === document.querySelector('[data-message-id="1"]') && window.savedAnchor === document.querySelector('.mgr-text a')));
+  const before = await f.draft();
+  f.state.threads = []; await f.poll();
+  assert.equal(await links.count(), 0, 'unavailable inventory removes inline links, not text');
+  assert.equal((await f.draft()).text, before.text);
+  f.state.threads = threads; await f.poll();
+  await f.context.route('**/wizard-os-home/?session=*', route => route.fulfill({contentType: 'text/html', body: '<h1>Isolated destination</h1>'}));
+  await links.nth(1).click();
+  await f.page.waitForURL('**/wizard-os-home/?session=thread%2Ftwo');
+  assert.equal(await f.page.evaluate(() => JSON.parse(localStorage.getItem('wizard-manager:conversation:v1')).text), before.text);
+  assert.equal(f.posts.length, 0);
+});
+test('explicit canonical links escape labels, reject arbitrary URLs and block navigation if draft save fails', async t => {
+  const text = '[<img src=x onerror=alert(1)>](/wizard-os-home/?session=thread%2Fone) [Share files](javascript:alert) [Share files](/wizard-os-home/?session=missing)';
+  const f = await setup(t, {state: {threads: [{id:'thread/one', title:'Share files'}], messages:[{...answer(1,'safe',text),source_id:'original'}]}});
+  assert.equal(await f.frame.locator('.mgr-text img').count(), 0);
+  assert.equal(await f.frame.locator('.mgr-text a').count(), 1);
+  assert.equal(await f.frame.locator('.mgr-text a').textContent(), '<img src=x onerror=alert(1)>');
+  assert.equal(await f.frame.locator('.mgr-actions a').getAttribute('href'), '/wizard-os-home/?session=original', 'existing source link remains');
+  await f.frame.locator('#message').fill('Unsent draft');
+  await f.frame.evaluate(() => { Storage.prototype.setItem = () => { throw new Error('fixture storage failure'); }; });
+  await f.frame.locator('.mgr-text a').click();
+  assert.ok(f.page.url().endsWith('/index.html'));
+  assert.equal(await f.frame.locator('#message').inputValue(), 'Unsent draft');
+});
+test('read-only captured historical Manager paragraph resolves all nine canonical destinations', {skip: !process.env.MANAGER_HISTORY_SNAPSHOT}, async t => {
+  const snapshot = JSON.parse(fs.readFileSync(process.env.MANAGER_HISTORY_SNAPSHOT, 'utf8'));
+  for (const viewport of [{width:390,height:844}, {width:1440,height:1000}]) {
+    const f = await setup(t, {hosted: true, viewport, state:{threads:snapshot.threads,messages:[snapshot.message]}});
+    const actual = await f.frame.locator('.mgr-text a').evaluateAll(nodes => nodes.map(n => ({text:n.textContent,href:n.getAttribute('href')})));
+    assert.deepEqual(actual, snapshot.expected);
+    assert.equal(await f.frame.locator('.mgr-text').textContent(), snapshot.message.text);
+    assert.equal(f.posts.length, 0);
+    if (evidence) {
+      await f.page.screenshot({path:path.join(evidence, 'historical-inline-' + viewport.width + '.png')});
+      fs.writeFileSync(path.join(evidence, 'historical-inline-' + viewport.width + '.json'), JSON.stringify(actual,null,2));
+    }
+  }
+});
 test('empty is honest; standalone and hosted identity, width, and transparent inherited canvas', async t => {
   const f = await setup(t, { hosted: true, viewport: { width: 1440, height: 900 } });
   assert.equal(await f.frame.locator('#thread li').count(), 0);

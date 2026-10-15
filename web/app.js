@@ -13,6 +13,8 @@
   let newBelow = 0, pinned = true, scrollFrame = 0, retrying = new Set(), jobErrors = new Set();
   let restoring = true;
   const panels = new Map();
+  let inventoryKey = '', resolveThreads = window.ManagerThreadLinks.resolver([]);
+  const richText = new Map();
   const validTarget = t => t && Number.isSafeInteger(t.reply_to) && t.reply_to > 0 && typeof t.source_id === 'string' && t.source_id.length > 0;
   function restore() {
     try {
@@ -81,6 +83,20 @@
     a.addEventListener('click', event => { saveScroll(); if (!persist()) { event.preventDefault(); renderControls(); say('Draft couldn’t be saved. Keep this window open.'); } });
     return a;
   }
+  function messageText(m, className) {
+    const p = element('p', className);
+    if (m.role === 'user') { p.textContent = m.text; return p; }
+    richText.set(m.id, { node: p, text: m.text, signature: null });
+    updateText(richText.get(m.id));
+    return p;
+  }
+  function updateText(entry) {
+    const parts = resolveThreads(entry.text), signature = JSON.stringify(parts);
+    if (entry.signature === signature) return;
+    entry.signature = signature;
+    entry.node.replaceChildren(...parts.map(part => part.source_id
+      ? link(part, part.text) : document.createTextNode(part.text)));
+  }
   function attention(m) {
     // Only structured plain text is displayed. No worker-provided action is executable.
     try { const value = typeof m.attention === 'string' ? JSON.parse(m.attention) : m.attention; return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch (_) { return {}; }
@@ -106,7 +122,7 @@
       card.classList.toggle('has-attention', !!ask || ['blocked', 'failed', 'needs_input', 'needs_approval'].includes(a.state));
       const label = {needs_you: 'Needs you', check: 'Your call', done: 'Done', fyi: 'Update'}[a.state] || 'Ready';
       const top = element('div', 'mgr-card-top'); top.append(element('span', '', label), time(m.created));
-      card.append(top, element('h2', '', m.title || 'Work thread'), element('p', 'mgr-summary', m.text));
+      card.append(top, element('h2', '', m.title || 'Work thread'), messageText(m, 'mgr-summary'));
       if (ask) card.append(element('p', 'mgr-ask', ask));
       if (m.source_available === false) card.append(element('p', '', 'This thread isn’t available anymore.'));
       const actions = element('div', 'mgr-actions');
@@ -119,7 +135,7 @@
       receipt.append(element('strong', '', 'Sent to a work thread · ' + (m.title || 'Work thread')), element('p', '', 'Accepted—not finished yet.'));
       const actions = element('div', 'mgr-actions'); actions.append(link(m, 'Open thread →')); receipt.append(actions); body.append(receipt, time(m.created));
     } else {
-      body.append(element('p', 'mgr-text', m.text));
+      body.append(messageText(m, 'mgr-text'));
       if (source(m) && m.role !== 'user') { const actions = element('div', 'mgr-actions'); actions.append(link(m)); body.append(actions); }
       if (!continuation) body.append(time(m.created));
     }
@@ -240,6 +256,13 @@
   }
   function merge(data) {
     if (typeof data.enabled !== 'boolean' || !Array.isArray(data.messages) || !Array.isArray(data.jobs)) throw new Error('Invalid state');
+    const nextKey = JSON.stringify(data.threads || []);
+    if (nextKey !== inventoryKey) {
+      inventoryKey = nextKey; resolveThreads = window.ManagerThreadLinks.resolver(data.threads);
+      const top = scroller.scrollTop;
+      for (const entry of richText.values()) updateText(entry);
+      scroller.scrollTop = pinned ? scroller.scrollHeight : top;
+    }
     const newMessages = [];
     for (const m of data.messages) {
       if (!Number.isSafeInteger(m.id) || m.id <= 0 || !['user', 'assistant'].includes(m.role) || typeof m.text !== 'string') throw new Error('Invalid message');
