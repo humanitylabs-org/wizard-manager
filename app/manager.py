@@ -72,11 +72,16 @@ class Manager:
             c.execute("UPDATE jobs SET status='queued' WHERE status='working'")
             c.execute("UPDATE events SET status='pending' WHERE status='working'")
 
+    @__import__('contextlib').contextmanager
     def connect(self):
         c = sqlite3.connect(self.db, timeout=15)
         c.row_factory = sqlite3.Row
         c.execute('PRAGMA journal_mode=WAL')
-        return c
+        try:
+            with c:
+                yield c
+        finally:
+            c.close()
 
     def setting(self, key, default=None):
         with self.connect() as c:
