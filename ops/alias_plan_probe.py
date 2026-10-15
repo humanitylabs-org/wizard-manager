@@ -33,8 +33,19 @@ def main():
     report = {'model': MODEL, 'mode': 'plan-only, synthetic context, no WAS calls',
               'manager_sha256': hashlib.sha256(source.read_bytes()).hexdigest(), 'cases': []}
     observed_models = []
+    fixture_sessions = []
 
     def model_only(url, body=None, headers=None, method=None, timeout=30):
+        if url.startswith('http://unused.invalid/api/sessions') and body is None and method is None:
+            # The lookup path may read fixtures; no real WAS request is made.
+            from urllib.parse import parse_qs, urlsplit
+            if urlsplit(url).path.endswith('/messages'):
+                offset = int(parse_qs(urlsplit(url).query).get('offset', ['0'])[0])
+                return {'data': [], 'pagination': {'returned': 0, 'offset': offset, 'order': 'latest'}}
+            if urlsplit(url).path != '/api/sessions':
+                sid = urlsplit(url).path.rsplit('/', 1)[-1]
+                return {'session': next((s for s in fixture_sessions if s['id'] == sid), None)}
+            return {'data': list(fixture_sessions), 'has_more': False, 'snapshot': 'fixture'}
         if url != model_url or body is None or body.get('model') != MODEL:
             raise AssertionError('Probe blocked a non-model request')
         response = http_json(url, body, headers, method, timeout)
@@ -42,6 +53,7 @@ def main():
         return response
 
     def run(name, latest, expected, history=(), sessions=(), expected_sid=None):
+        fixture_sessions[:] = sessions
         start = time.monotonic()
         case = {'name': name, 'latest': latest, 'expected_action': expected,
                 'expected_session_id': expected_sid}
