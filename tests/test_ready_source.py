@@ -162,6 +162,8 @@ class ReadySourceTests(unittest.TestCase):
                 return {'model': MODEL, 'choices': [{'message': {'content': 'Review the fixture result.'}}]}
             if '/api/sessions?' in url:
                 return {'data': list(sessions), 'has_more': False}
+            if '/api/sessions/' in url:
+                return {'session': next((s for s in sessions if s['id'] == url.rsplit('/', 1)[-1]), None)}
             raise AssertionError('Unexpected external request: ' + url)
         self.row(content=tagged('Old pre-opt-in result.'), message_uid='old-logical')
         manager = Manager(self.path.parent / 'manager', was='http://was', model_url='http://model',

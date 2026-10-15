@@ -8,7 +8,7 @@
     "/api/state": {
       "get": {
         "summary": "Read persistent conversation, jobs and monitor state",
-        "description": "Supports after integer message cursor. messages are ascending; job_id correlates sends. jobs excludes completed jobs.",
+        "description": "Supports after integer message cursor. messages are ascending and omit unavailable assistant source updates, never user-authored turns. next_after advances over raw retained rows (including suppressed rows); has_more governs paging. Every page includes suppressed_sources, the current canonical source-ID suppression snapshot. Clients must evict matching retained assistant cards and reply metadata even when messages is empty. suppress_source_updates fails closed if the bounded projection is exceeded. When a previously suppressed source becomes available, replay from after=0 with ID deduplication. job_id correlates sends; jobs excludes completed jobs. Polling is read-only and does not perform network visibility checks.",
         "responses": {
           "200": {
             "description": "Successful response"

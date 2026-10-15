@@ -49,6 +49,25 @@ class ReadySource:
         conn.execute('PRAGMA query_only=ON')
         return conn
 
+    def blocked_sources(self, ids):
+        """Current canonical visibility, not absence from WAS's active inventory.
+
+        Archives remain valid historical evidence. Missing/child/hidden sources
+        do not. Only session metadata is read; no history or private stores.
+        """
+        ids = set(ids)
+        ordered = sorted(ids)
+        allowed = set()
+        with closing(self.open()) as c:
+            c.execute('PRAGMA busy_timeout=250')
+            for start in range(0, len(ids), 400):
+                batch = ordered[start:start + 400]
+                marks = ','.join('?' for _ in batch)
+                allowed.update(r['id'] for r in c.execute(
+                    f'SELECT id FROM sessions WHERE id IN ({marks}) '
+                    'AND coalesce(hidden,0)=0 AND parent_session_id IS NULL', batch))
+        return ids - allowed
+
     def head(self):
         with closing(self.open()) as c:
             return int(c.execute('SELECT coalesce(max(id),0) FROM messages').fetchone()[0])
