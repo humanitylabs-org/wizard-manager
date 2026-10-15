@@ -71,9 +71,14 @@ class FakeAPI:
         if self.was_fail:
             raise RuntimeError('simulated WAS offline')
         if '/messages?' in url:
-            raise AssertionError('Ready evidence must not use stripped WAS message history')
+            from urllib.parse import parse_qs, urlparse
+            offset = int(parse_qs(urlparse(url).query).get('offset', ['0'])[0])
+            return {'data': [], 'pagination': {'offset': offset, 'order': 'latest', 'returned': 0}}
         if '/api/sessions?' in url:
             return {'data': self.sessions, 'has_more': False, 'snapshot': 'fixture'}
+        if '/api/sessions/' in url and body is None:
+            sid = url.rsplit('/', 1)[-1]
+            return {'session': next((s for s in self.sessions if s['id'] == sid), None)}
         if url.endswith('/api/sessions') and body is not None and self.on_create:
             self.on_create()
         if url.endswith('/v1/runs'):
@@ -554,18 +559,18 @@ class ManagerTests(unittest.TestCase):
         self.assertFalse(context['work_status_current'])
         self.assertEqual(context['work'], [])
 
-    def test_cached_inventory_is_deliberately_warmed_for_status_reply(self):
+    def test_cached_inventory_cannot_authorize_status_after_lookup_failure(self):
         self.ready()
         self.m.sessions(fresh=True)
         self.api.calls.clear()
         self.api.was_fail = True
-        self.api.output = '{"action":"reply","text":"The fixture reports done.","session_id":"wizard_fixture"}'
+        self.api.output = '{"action":"reply","text":"Current work lookup is unavailable."}'
         self.send('What is the fixture status?'); self.m.process_job()
-        self.assertEqual(self.m.state()['messages'][-1]['source_id'], 'wizard_fixture')
-        self.assertEqual([c[0] for c in self.api.calls], ['http://model'])
-        context = json.loads(self.api.calls[0][1]['messages'][-1]['content'])
-        self.assertTrue(context['work_status_current'])
-        self.assertEqual(context['work'][0]['id'], 'wizard_fixture')
+        self.assertIsNone(self.m.state()['messages'][-1]['source_id'])
+        context = json.loads(next(c[1] for c in self.api.calls if c[0] == 'http://model')['messages'][-1]['content'])
+        self.assertFalse(context['work_status_current'])
+        self.assertEqual(context['work'], [])
+        self.assertEqual(context['lookup']['state'], 'unavailable')
 
     def test_stale_inventory_is_labelled_not_refreshed_in_foreground(self):
         self.ready(); self.m.sessions(fresh=True)
