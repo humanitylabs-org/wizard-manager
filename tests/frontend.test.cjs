@@ -21,6 +21,7 @@ window.holds=0;window.WizAppServices={connect:(frame,domain)=>{window.domain=dom
 </script></body></html>`;
 before(async () => {
   assert.ok(process.env.CORE_CLIENT, 'CORE_CLIENT must point to the real shared core source');
+  assert.ok(fs.existsSync(process.env.CORE_CLIENT), 'CORE_CLIENT file must exist; missing core invalidates this QA run');
   server = http.createServer((req, res) => {
     const pathname = new URL(req.url, 'http://fixture').pathname;
     if (pathname.includes('/api/')) { res.writeHead(500); return res.end('Live API forbidden in frontend tests'); }
