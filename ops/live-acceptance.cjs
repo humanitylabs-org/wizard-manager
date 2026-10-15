@@ -6,7 +6,9 @@ const b=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE,he
 const results=[];
 for(const mode of ['desktop','phone']){
  const c=await b.newContext({viewport:mode==='phone'?{width:412,height:915}:{width:1440,height:1000},isMobile:mode==='phone',hasTouch:mode==='phone'});
- const p=await c.newPage();let errors=[];p.on('pageerror',e=>errors.push(e.message));
+ const p=await c.newPage();
+ if(process.env.MANAGER_LINKS_CANDIDATE) await p.route('**/core/links.js*',r=>r.fulfill({path:process.env.MANAGER_LINKS_CANDIDATE,contentType:'application/javascript'}));
+ let errors=[];p.on('pageerror',e=>errors.push(e.message));
  await p.goto(process.env.MANAGER_PUBLIC_ORIGIN+'/wizard-os-home/?shell='+mode+'&open=wizard-manager');
  await p.waitForTimeout(2500);const f=p.frames().find(x=>x.url().includes('/wizard-manager/'));assert(f,'launcher iframe');
  await f.locator('#message').fill('Unsent acceptance draft — keep this across skins.');
@@ -38,7 +40,8 @@ for(const mode of ['desktop','phone']){
  await f.locator('#message').fill('');
  const link=f.locator('a[href*="wizard_manager_2314d9faefd18768861435b9"]').first();
  if(await link.count()){
-  await link.click();await p.waitForTimeout(7000);
+  await link.click();
+  await p.getByText('Verified Python executable:',{exact:false}).last().waitFor({state:'visible',timeout:35000});
   assert(p.url().startsWith(process.env.MANAGER_PUBLIC_ORIGIN));
   const all=await p.locator('body').innerText();
   fs.writeFileSync(out+'/'+mode+'-source-body.txt',all);

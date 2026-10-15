@@ -104,7 +104,8 @@
       const hasSource = !!source(m), a = attention(m), ask = typeof a.ask === 'string' ? a.ask : '';
       card.classList.toggle('has-source', hasSource);
       card.classList.toggle('has-attention', !!ask || ['blocked', 'failed', 'needs_input', 'needs_approval'].includes(a.state));
-      const top = element('div', 'mgr-card-top'); top.append(element('span', '', 'Ready'), time(m.created));
+      const label = {needs_you: 'Needs you', check: 'Your call', done: 'Done', fyi: 'Update'}[a.state] || 'Ready';
+      const top = element('div', 'mgr-card-top'); top.append(element('span', '', label), time(m.created));
       card.append(top, element('h2', '', m.title || 'Work thread'), element('p', 'mgr-summary', m.text));
       if (ask) card.append(element('p', 'mgr-ask', ask));
       if (m.source_available === false) card.append(element('p', '', 'This thread isn’t available anymore.'));
