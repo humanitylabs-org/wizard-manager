@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
-  <title>Habits</title>
+  <title>Archimedes · Manager</title>
   <script src="boot.js"></script>
   <link rel="stylesheet" href="wizard-ui.css">
   <link rel="stylesheet" href="styles.css">
@@ -12,27 +12,42 @@
   <script defer src="app.js"></script>
 </head>
 <body>
-  <div class="wz-app">
-    <header class="wz-head"><h1>Habits</h1><p id="day"></p></header>
-    <main class="wz-scroll">
-      <section class="wz-sec" aria-labelledby="today-h">
-        <h2 class="wz-sec-h" id="today-h">Today <small id="day-short"></small><span id="count" class="wz-count" hidden></span></h2>
-        <div class="habit-progress" id="progress" hidden><i></i></div>
-        <ul id="habits" class="wz-list" aria-label="Your habits"></ul>
-        <div id="empty" class="wz-empty" hidden>
-          <div class="wz-tile" aria-hidden="true">✓</div>
-          <strong>No habits yet</strong>
-          <p>Add one below, then tap it each day you do it.</p>
-        </div>
-      </section>
-    </main>
-    <p id="status" class="wz-status" role="status" aria-live="polite"></p>
-    <form id="add-form" class="wz-compose" autocomplete="off">
-      <input id="habit-name" class="wz-input" aria-label="New habit" placeholder="New habit, e.g. Drink water" maxlength="60" enterkeyhint="done" required>
-      <button id="add" class="wz-send" type="submit" aria-label="Add habit" disabled>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-      </button>
+  <main class="wz-app mgr">
+    <header class="wz-head mgr-head"><span id="header-portrait"></span><h1>Archimedes</h1></header>
+    <div id="notice" class="mgr-notice" hidden></div>
+    <section id="conversation" class="wz-scroll" aria-label="Conversation" tabindex="0">
+      <div id="empty" class="wz-empty mgr-empty" hidden>
+        <span id="empty-portrait"></span>
+        <strong id="empty-title">Archimedes</strong>
+        <p id="empty-copy">Talk to me here. I’ll keep replies short and bring back results from your work threads.</p>
+        <button id="empty-enable" class="mgr-text-action" type="button" hidden>Turn on</button>
+      </div>
+      <ol id="thread" class="mgr-thread"></ol>
+    </section>
+    <form id="compose" class="wz-compose mgr-dock" autocomplete="off">
+      <button id="jump" class="mgr-jump" type="button" hidden></button>
+      <div id="destination" class="mgr-dest" hidden></div>
+      <div id="confirmation" class="mgr-dest" hidden></div>
+      <div id="send-state" class="mgr-sendstate" hidden></div>
+      <div id="storage-state" class="mgr-sendstate mgr-error" hidden>Draft couldn’t be saved on this device. Keep this window open.</div>
+      <div class="mgr-row">
+        <button id="options-open" class="mgr-opt" type="button" aria-label="Manager options" aria-haspopup="dialog">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7m4 0h5M4 17h3m4 0h9"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
+        </button>
+        <textarea id="message" class="wz-input" rows="1" maxlength="12000" aria-label="Message Archimedes" placeholder="Message Archimedes" enterkeyhint="enter" aria-describedby="send-state storage-state"></textarea>
+        <button id="send" class="wz-send" type="submit" aria-label="Send to Archimedes" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
     </form>
-  </div>
+    <div id="announcer" class="wz-sr" aria-live="polite" aria-atomic="true"></div>
+    <dialog id="options" class="mgr-options" aria-labelledby="options-title" aria-describedby="options-copy">
+      <div class="mgr-modal-head"><h2 id="options-title">Manager</h2><button id="options-close" type="button" aria-label="Close Manager options">×</button></div>
+      <p id="options-copy">Chat here and receive summaries from your work threads.</p>
+      <div class="mgr-setting"><span>Manager</span><button id="enabled" type="button" role="switch" aria-label="Manager enabled" aria-checked="false" disabled><span id="enabled-label">Checking…</span><span class="mgr-switch-track" aria-hidden="true"><i></i></span></button></div>
+      <p class="mgr-modal-note">Turning off pauses new Manager activity. Work already started continues in Chats.</p>
+      <p id="options-state" class="mgr-modal-note"></p>
+    </dialog>
+  </main>
 </body>
 </html>
