@@ -94,6 +94,42 @@ for (const viewport of [{width:390,height:844},{width:1280,height:900}]) test(`c
   const restored=await frame.evaluate(()=>JSON.parse(localStorage.getItem('wizard-manager:conversation:v1')));
   assert.equal(restored.scroll.anchorMessageId,saved.anchorMessageId);assert(Math.abs(restored.scroll.offset-saved.offset)<3);assert.equal(restored.text,'kept draft');
 });
+test('hidden sources purge retained cards and receipt metadata without losing user text; recovery replays older IDs', async t => {
+  const hidden = ready(1, 'Hidden source title');
+  const f = await setup(t, {state:{messages:[hidden, user(2,'fixture-user','Keep my words'), ready(3,'Archived genuine result')], suppressed_sources:[]}});
+  await f.frame.locator('[data-ready-id="1"] button').click();
+  await f.frame.locator('#message').fill('Keep my unsent draft');
+  await f.frame.evaluate(() => { window.keptUserNode = document.querySelector('[data-message-id="2"]'); });
+  f.state.suppressed_sources = [hidden.source_id];
+  f.state.messages = f.state.messages.filter(m => m.id !== 1);
+  await f.poll();
+  assert.equal(await f.frame.locator('[data-message-id="1"]').count(), 0);
+  assert.equal(await f.frame.locator('[data-message-id="3"]').count(), 1, 'archive is not hidden');
+  assert.equal(await f.frame.locator('#message').inputValue(), 'Keep my unsent draft');
+  assert.equal(await f.frame.locator('#send').isEnabled(), false, 'do not silently redirect a hidden-target draft');
+  assert.equal(await f.frame.evaluate(() => document.body.textContent.includes('Hidden source title')), false);
+  assert.equal(JSON.stringify(await f.draft()).includes('Hidden source title'), false);
+  assert(await f.frame.evaluate(() => window.keptUserNode === document.querySelector('[data-message-id="2"]')));
+  f.state.messages.unshift(hidden); f.state.suppressed_sources = [];
+  await f.poll();
+  assert.deepEqual(await f.frame.locator('[data-message-id]').evaluateAll(ns => ns.map(n => Number(n.dataset.messageId))), [1,2,3]);
+  assert.equal(await f.frame.locator('#message').inputValue(), 'Keep my unsent draft');
+  assert.equal(f.posts.length, 0);
+  f.state.messages.shift(); f.state.suppressed_sources = [hidden.source_id]; await f.poll();
+  await f.page.reload(); await f.frame.waitForSelector('[data-message-id="3"]');
+  assert.equal(await f.frame.locator('[data-message-id="1"]').count(), 0);
+  assert.equal(await f.frame.locator('#message').inputValue(), 'Keep my unsent draft');
+});
+test('a fully suppressed page drains using raw next_after rather than visible count', async t => {
+  const offsets = [];
+  const f = await setup(t, {route: async (route, req, url) => {
+    if (url.pathname !== '/api/state') return false;
+    const after = Number(url.searchParams.get('after')); offsets.push(after);
+    await route.fulfill({json:{enabled:true,jobs:[],suppressed_sources:['hidden'],messages: after === 0 ? [] : [user(1001,'fixture-after-page')].filter(m => m.id > after),next_after:after === 0 ? 1000 : 1001,has_more:after === 0}}); return true;
+  }});
+  await f.frame.waitForSelector('[data-message-id="1001"]');
+  assert(offsets.includes(1000)); assert.equal(f.posts.length,0);
+});
 test('inline named links update historical display only; safe anchors retain draft and exact destinations', async t => {
   const threads = [{id: 'thread/one', title: 'Wizard OS · Share files'}, {id: 'thread/two', title: 'Unify responsive features across desktop and mobile'}];
   const text = 'Share files and Unify responsive features are running.';

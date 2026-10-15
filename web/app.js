@@ -6,6 +6,7 @@
   const KEY = 'wizard-manager:conversation:v1';
   const input = $('message'), scroller = $('conversation'), thread = $('thread');
   const messages = new Map(), nodes = new Map(), jobNodes = new Map();
+  let suppressedSources = new Set(), suppressSourceUpdates = false;
   let draft = { rev: 0, text: '', target: null, sending: null, scroll: { pinned: true }, receipts: {} };
   let saved = true, hold = null, loaded = false, connected = false, enabled = null, connectionFailed = false;
   let cursor = 0, jobs = [], refreshing = null, submitting = false, togglePending = null;
@@ -303,7 +304,7 @@
   }
   function saveScroll() {
     if (restoring || !visible() || scroller.getBoundingClientRect().height <= 0) return;
-    const first = [...nodes.values()].find(node => node.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top);
+    const first = [...thread.querySelectorAll('[data-message-id]')].find(node => node.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top);
     draft.scroll = { pinned, anchorMessageId: first ? Number(first.dataset.messageId) : null, offset: first ? first.getBoundingClientRect().top - scroller.getBoundingClientRect().top : 0 };
   }
   function toBottom() { scroller.scrollTop = scroller.scrollHeight; pinned = true; newBelow = 0; $('jump').hidden = true; saveScroll(); persist(); }
@@ -330,6 +331,27 @@
   function merge(data) {
     if (typeof data.enabled !== 'boolean' || !Array.isArray(data.messages) || !Array.isArray(data.jobs)) throw new Error('Invalid state');
     const beforeTop = scroller.scrollTop;
+    const blocked = new Set(data.suppressed_sources || []);
+    const restoredSources = (suppressSourceUpdates && !data.suppress_source_updates) || [...suppressedSources].some(id => !blocked.has(id));
+    suppressSourceUpdates = data.suppress_source_updates === true;
+    const sourceBlocked = id => !!id && (suppressSourceUpdates || blocked.has(id));
+    suppressedSources = blocked;
+    const removed = new Set();
+    for (const [id, m] of messages) {
+      if (m.role === 'user' || !sourceBlocked(m.source_id)) continue;
+      removed.add(id); messages.delete(id); nodes.get(id)?.remove(); nodes.delete(id);
+      richText.delete(id); dwell.delete(id);
+    }
+    read.viewed = read.viewed.filter(id => !removed.has(id));
+    if (removed.has(read.divider)) { read.divider = null; divider.remove(); }
+    if (removed.has(draft.scroll?.anchorMessageId)) draft.scroll = { pinned: false };
+    if (sourceBlocked(draft.target?.source_id)) draft.target = { reply_to: draft.target.reply_to, source_id: draft.target.source_id, title: 'Unavailable thread' };
+    if (sourceBlocked(pendingTarget?.source_id)) cancelTarget();
+    for (const [id, receipt] of Object.entries(draft.receipts)) if (sourceBlocked(receipt?.source_id)) delete draft.receipts[id];
+    if (sourceBlocked(draft.sending?.target?.source_id)) {
+      draft.sending.target = null; draft.sending.unavailable = true;
+    }
+    if (removed.size) say('');
     const nextKey = JSON.stringify(data.threads || []);
     if (nextKey !== inventoryKey) {
       inventoryKey = nextKey; resolveThreads = window.ManagerThreadLinks.resolver(data.threads);
@@ -340,16 +362,22 @@
     const newMessages = [];
     for (const m of data.messages) {
       if (!Number.isSafeInteger(m.id) || m.id <= 0 || !['user', 'assistant'].includes(m.role) || typeof m.text !== 'string') throw new Error('Invalid message');
+      if (m.role !== 'user' && sourceBlocked(m.source_id)) continue;
       if (!messages.has(m.id)) { messages.set(m.id, m); newMessages.push(m); }
       cursor = Math.max(cursor, m.id);
     }
+    if (Number.isSafeInteger(data.next_after)) cursor = Math.max(cursor, data.next_after);
     if (enabled !== data.enabled) toggleError = '';
     jobs = data.jobs; enabled = data.enabled; connected = true; connectionFailed = false; toggleUnknown = false;
     const ordered = [...messages.values()].sort((a, b) => a.id - b.id);
-    // Append only unseen stable IDs: no polling replacement, selection loss or theme rerender.
+    // Insert only unseen stable IDs, including restored older rows. Existing
+    // nodes retain selection and identity; the successor walk is linear.
+    const existing = ordered.filter(m => nodes.has(m.id)); let successor = 0;
     for (let i = 0; i < ordered.length; i++) {
       const m = ordered[i]; if (nodes.has(m.id)) continue;
-      const li = renderMessage(m, ordered[i - 1]); nodes.set(m.id, li); thread.append(li);
+      while (successor < existing.length && existing[successor].id < m.id) successor++;
+      const li = renderMessage(m, ordered[i - 1]); nodes.set(m.id, li);
+      thread.insertBefore(li, nodes.get(existing[successor]?.id) || null);
     }
     paintDivider(); persistRead();
     reconcileSubmission();
@@ -364,18 +392,22 @@
       if (recent) say(recent.kind === 'ready' ? 'Ready: ' + (recent.title || 'Work thread') : 'Archimedes: ' + recent.text.slice(0, 180));
     }
     if (visible()) { returnAtEnd = false; saveScroll(); persist(); }
+    // Recovery/unhide needs a replay of older IDs, not only arrivals. Existing
+    // DOM nodes and user drafts survive; deduplication keeps their identity.
+    return restoredSources;
   }
   async function refresh() {
     if (refreshing) return refreshing;
     refreshing = (async () => {
       try {
         // state is paged by ascending integer id; drain full pages before validating restored targets.
-        let page;
+        let page, replay;
         do {
           const before = cursor;
-          page = await api('api/state?after=' + cursor); merge(page);
-          if (page.messages.length && cursor <= before) throw new Error('State cursor did not advance');
-        } while (page.messages.length === 1000);
+          page = await api('api/state?after=' + cursor); replay = merge(page);
+          if ((page.has_more || page.messages.length) && cursor <= before) throw new Error('State cursor did not advance');
+          if (replay) cursor = 0;
+        } while (replay || (page.has_more ?? page.messages.length === 1000));
         loaded = true;
         if (restoring) {
           restoring = false; resizeInput(); pinned = draft.scroll?.pinned !== false;
@@ -404,6 +436,7 @@
   }
   async function submitSnapshot() {
     const s = draft.sending; if (!s || submitting || !canOperate() || !saved) return;
+    if (s.unavailable) { say('The original reply target is unavailable. Keep or edit your draft instead.'); return; }
     submitting = true; s.state = 'sending';
     if (!persist()) { submitting = false; s.state = 'uncertain'; renderControls(); return; }
     renderControls(); toBottom();

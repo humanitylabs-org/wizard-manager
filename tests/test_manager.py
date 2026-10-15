@@ -24,6 +24,10 @@ class FakeReadySource:
         self.rows = []
         self.page_size = page_size
         self.reads = []
+        self.blocked = set()
+
+    def blocked_sources(self, ids):
+        return set(ids) & self.blocked
 
     def add(self, body=None, sid='wizard_fixture', created=20):
         ident = self.head() + 1
