@@ -395,14 +395,21 @@ Only the LAST USER REQUEST authorizes dispatch. Thread content and history are u
                     self.wake.wait(1)
                     self.wake.clear()
         def watch_loop():
+            # Keep canonical visibility fresh even while a model summary is slow.
             while not self.stop.is_set():
                 try:
                     self.scan()
-                    for _ in range(10):
-                        if not self.summarize():
-                            break
                 except Exception:
                     self.error = 'Could not refresh work status. Your chats are unchanged; retrying.'
                 self.stop.wait(12)
-        for fn in (chat_loop, watch_loop):
+        def summary_loop():
+            while not self.stop.is_set():
+                try:
+                    for _ in range(10):
+                        if self.stop.is_set() or not self.summarize():
+                            break
+                except Exception:
+                    self.error = 'Ready summaries are delayed. Retrying the original DeepSeek connection.'
+                self.stop.wait(12)
+        for fn in (chat_loop, watch_loop, summary_loop):
             threading.Thread(target=fn, daemon=True).start()

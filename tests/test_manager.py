@@ -122,6 +122,54 @@ class ManagerTests(unittest.TestCase):
         with (manager or self.m).connect() as c:
             return [r[0] for r in c.execute('SELECT status FROM events ORDER BY rowid')]
 
+    def test_slow_summary_does_not_block_inventory_refresh_or_visibility_removal(self):
+        self.ready()
+        self.m.sessions(fresh=True)
+        entered, release = threading.Event(), threading.Event()
+        threads = []
+        real_thread = threading.Thread
+
+        class FastStop(threading.Event):
+            def wait(self, timeout=None):
+                return super().wait(min(timeout or 0.01, 0.01))
+
+        def tracked_thread(*args, **kwargs):
+            thread = real_thread(*args, **kwargs)
+            threads.append(thread)
+            return thread
+
+        def slow_summary():
+            entered.set()
+            release.wait(3)
+            return False
+
+        def wait_for(predicate):
+            deadline = time.monotonic() + 1
+            while not predicate() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(predicate(), 'inventory monitor remained blocked by summary')
+
+        self.m.stop = FastStop()
+        with patch.object(self.m, 'summarize', slow_summary), patch('manager.threading.Thread', tracked_thread):
+            try:
+                self.m.start()
+                self.assertTrue(entered.wait(1))
+                self.m.cache_at = time.time() - 60
+                wait_for(lambda: bool(self.m.thread_inventory()))
+                self.assertEqual(self.m.thread_inventory()[0]['id'], 'wizard_fixture')
+                self.assertFalse(release.is_set(), 'summary must still be blocked')
+                self.api.sessions = []
+                wait_for(lambda: not self.m.thread_inventory())
+                self.assertLess(time.time() - self.m.cache_at, 45, 'removal came from fresh canonical inventory')
+            finally:
+                self.m.stop.set()
+                self.m.wake.set()
+                release.set()
+                for thread in threads:
+                    thread.join(2)
+                self.m.dispatch_pool.shutdown(wait=True)
+                self.assertFalse(any(thread.is_alive() for thread in threads))
+
     def test_thread_inventory_uses_visible_canonical_snapshot_without_history_mutation(self):
         self.api.sessions = [
             {'id': 'visible/one', 'title': 'Wizard OS · Share files'},
