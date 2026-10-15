@@ -12,6 +12,58 @@
   let toggleUnknown = false, toggleError = '', pendingTarget = null, confirmLayer = null, optionsLayer = null;
   let newBelow = 0, pinned = true, scrollFrame = 0, retrying = new Set(), jobErrors = new Set();
   let restoring = true;
+  // Seen receipts are separate from the stable catch-up boundary. Fetching never reads.
+  let read = { seen: 0, viewed: [], divider: null }, wasVisible = false;
+  const dwell = new Map();
+  const divider = document.createElement('li'); divider.className = 'mgr-new-messages'; divider.textContent = 'New messages';
+  divider.setAttribute('role', 'separator'); divider.setAttribute('aria-label', 'New messages');
+  function visible() { try { return !document.hidden && (core?.view ? core.view.isVisible() : !core?.hosted); } catch (_) { return false; } }
+  function unread(m) { return m.role === 'assistant' && m.id > read.seen && !read.viewed.includes(m.id); }
+  function paintDivider() {
+    const top = scroller.scrollTop;
+    if (!read.divider) read.divider = [...messages.values()].filter(unread).sort((a,b) => a.id-b.id)[0]?.id || null;
+    const node = nodes.get(read.divider);
+    if (node && node.previousSibling !== divider) node.before(divider);
+    if (!node) divider.remove();
+    scroller.scrollTop = top;
+  }
+  function persistRead() { draft.read = { ...read, viewed: [...read.viewed] }; persist(); }
+  function observeRead() {
+    if (!loaded || restoring) return;
+    const on = visible();
+    if (!on) {
+      dwell.clear();
+      if (wasVisible) {
+        saveScroll();
+        // Retire a completed catch-up boundary only when leaving, never during polling.
+        if (![...messages.values()].some(unread)) { read.divider = null; divider.remove(); }
+        persistRead();
+      }
+      wasVisible = false; return;
+    }
+    wasVisible = true;
+    const bounds = scroller.getBoundingClientRect(), now = Date.now(); let changed = false;
+    if (bounds.height <= 0 || $('options').open) { dwell.clear(); return; }
+    for (const m of messages.values()) {
+      if (!unread(m)) continue;
+      const r = nodes.get(m.id)?.getBoundingClientRect();
+      // Require the end of a message on screen, with time to read it. Tall messages
+      // count at their visible end; off-screen/history gaps never advance the watermark.
+      const inView = r && r.height > 0 && r.bottom > bounds.top && r.bottom <= bounds.bottom + 1 && (r.top >= bounds.top - 1 || r.height > bounds.height);
+      if (!inView) { dwell.delete(m.id); continue; }
+      if (!dwell.has(m.id)) dwell.set(m.id, now);
+      if (now - dwell.get(m.id) >= 600) { read.viewed.push(m.id); dwell.delete(m.id); changed = true; }
+    }
+    if (changed) {
+      for (const m of [...messages.values()].sort((a,b) => a.id-b.id)) {
+        if (m.id <= read.seen) continue;
+        if (m.role === 'assistant' && !read.viewed.includes(m.id)) break;
+        read.seen = m.id;
+      }
+      read.viewed = read.viewed.filter(id => id > read.seen);
+      persistRead();
+    }
+  }
   const panels = new Map();
   let inventoryKey = '', resolveThreads = window.ManagerThreadLinks.resolver([]);
   const richText = new Map();
@@ -25,6 +77,11 @@
       if (d.target && !validTarget(d.target)) throw new Error('Invalid destination');
       if (d.sending && (typeof d.sending.text !== 'string' || d.sending.text.length > 12000 || !/^[A-Za-z0-9_-]{8,100}$/.test(d.sending.request_id || '') || !Number.isSafeInteger(d.sending.rev))) throw new Error('Invalid submission');
       draft = { ...draft, ...d, receipts: d.receipts && typeof d.receipts === 'object' ? d.receipts : {} };
+      if (d.read && Number.isSafeInteger(d.read.seen) && d.read.seen >= 0) read = {
+        seen: d.read.seen,
+        viewed: Array.isArray(d.read.viewed) ? d.read.viewed.filter(id => Number.isSafeInteger(id) && id > d.read.seen) : [],
+        divider: Number.isSafeInteger(d.read.divider) && d.read.divider > 0 ? d.read.divider : null,
+      };
       if (draft.sending && draft.sending.state !== 'rejected') draft.sending.state = 'uncertain';
     } catch (_) {
       saved = false;
@@ -79,8 +136,18 @@
   }
   function source(m) { return typeof m.source_id === 'string' && m.source_id.trim() && m.source_id.length < 2048 && m.source_available !== false; }
   function link(m, label = 'Open thread') {
-    const a = element('a', '', label); a.href = '/wizard-os-home/?session=' + encodeURIComponent(m.source_id); a.target = '_top';
-    a.addEventListener('click', event => { saveScroll(); if (!persist()) { event.preventDefault(); renderControls(); say('Draft couldn’t be saved. Keep this window open.'); } });
+    const a = element('a', '', label); a.href = '/wizard-os-home/?session=' + encodeURIComponent(m.source_id);
+ a.dataset.wizardNativeThread = m.source_id; a.target = '_top';
+    a.addEventListener('click', event => {
+      if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault(); saveScroll();
+      if (!persist()) { renderControls(); say('Draft couldn’t be saved. Keep this window open.'); return; }
+      try {
+        if (core?.nav?.openThread(m.source_id)) { observeRead(); return; }
+      } catch (_) {}
+      if (!core?.hosted) { location.assign(a.href); return; }
+      say('Open Manager in the updated Wizard shell to read this thread here.');
+    });
     return a;
   }
   function messageText(m, className) {
@@ -277,9 +344,10 @@
       const m = ordered[i]; if (nodes.has(m.id)) continue;
       const li = renderMessage(m, ordered[i - 1]); nodes.set(m.id, li); thread.append(li);
     }
+    paintDivider(); persistRead();
     reconcileSubmission();
     if (loaded && newMessages.length) {
-      if (pinned) { scroller.scrollTop = scroller.scrollHeight; }
+      if (pinned && visible()) { scroller.scrollTop = scroller.scrollHeight; }
       else { newBelow += newMessages.length; $('jump').textContent = newBelow + ' new below ↓'; $('jump').hidden = false; }
       const recent = newMessages.filter(m => m.role === 'assistant').at(-1);
       if (recent) say(recent.kind === 'ready' ? 'Ready: ' + (recent.title || 'Work thread') : 'Archimedes: ' + recent.text.slice(0, 180));
@@ -300,7 +368,10 @@
         if (restoring) {
           restoring = false; resizeInput(); pinned = draft.scroll?.pinned !== false;
           const anchor = nodes.get(draft.scroll?.anchorMessageId);
-          if (pinned) scroller.scrollTop = scroller.scrollHeight;
+          if (pinned && read.divider && nodes.has(read.divider)) {
+            scroller.scrollTop += divider.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+            pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+          } else if (pinned) scroller.scrollTop = scroller.scrollHeight;
           else if (anchor) scroller.scrollTop += anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top - (Number(draft.scroll.offset) || 0);
         }
         renderControls(); return true;
@@ -445,5 +516,6 @@
   }
   window.visualViewport?.addEventListener('resize', viewport); addEventListener('resize', viewport);
   viewport(); renderControls(); refresh();
-  setInterval(() => { if (!document.hidden && navigator.onLine && togglePending === null) refresh(); }, 5000);
+  setInterval(observeRead, 250);
+  setInterval(() => { if (visible() && navigator.onLine && togglePending === null) refresh(); }, 5000);
 })();
