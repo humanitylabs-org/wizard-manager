@@ -396,13 +396,14 @@
     // start; subsequent draft edits never retarget or get consumed by an orb send.
     core.conversation?.register({
       snapshot: () => ({ replyTo: draft.target?.reply_to ?? null, label: draft.target ? 'Manager · reply in ' + draft.target.title : 'Manager conversation' }),
-      async receive({ request_id, text, target }) {
+      async receive({ request_id, text, target }, authorize) {
         if (!/^[A-Za-z0-9_-]{8,100}$/.test(request_id || '') || typeof text !== 'string' || !text.trim() || text.length > 12000 || !target || (target.replyTo !== null && (!Number.isSafeInteger(target.replyTo) || target.replyTo <= 0))) throw new Error('Invalid Manager conversation message');
         await refresh();
         // Reconcile first: a lost acknowledgement must not duplicate an accepted turn.
         const accepted = () => [...messages.values()].some(m => m.role === 'user' && m.job_id === 'user:' + request_id && m.text === text);
         if (accepted()) return { accepted: true, request_id };
         if (!canOperate()) throw new Error('Manager paused or offline · nothing sent');
+        authorize(); // revalidate pinned live document AFTER async state read, immediately before POST
         const receipt = await api('api/messages', { text, request_id, ...(target.replyTo === null ? {} : { reply_to: target.replyTo }) });
         if (receipt.accepted !== true || receipt.request_id !== request_id) throw new Error('Manager admission uncertain');
         if (refreshing) await refreshing;
