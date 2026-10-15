@@ -417,7 +417,7 @@
   if (core) {
     // The host owns the recording/request journal. Capture reply_to at recording
     // start; subsequent draft edits never retarget or get consumed by an orb send.
-    core.conversation?.register({
+    (core.voiceInput || core.conversation)?.register({
       snapshot: () => ({ replyTo: draft.target?.reply_to ?? null, label: draft.target ? 'Manager · reply in ' + draft.target.title : 'Manager conversation' }),
       async receive({ request_id, text, target }, authorize) {
         if (!/^[A-Za-z0-9_-]{8,100}$/.test(request_id || '') || typeof text !== 'string' || !text.trim() || text.length > 12000 || !target || (target.replyTo !== null && (!Number.isSafeInteger(target.replyTo) || target.replyTo <= 0))) throw new Error('Invalid Manager conversation message');

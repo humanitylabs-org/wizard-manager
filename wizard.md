@@ -31,6 +31,7 @@ view:
 provides:
 - manager-chat
 system: false
+receives_voice_input: true
 uses: []
 needs: []
 health: /healthz
