@@ -94,6 +94,36 @@ for (const viewport of [{width:390,height:844},{width:1280,height:900}]) test(`c
   const restored=await frame.evaluate(()=>JSON.parse(localStorage.getItem('wizard-manager:conversation:v1')));
   assert.equal(restored.scroll.anchorMessageId,saved.anchorMessageId);assert(Math.abs(restored.scroll.offset-saved.offset)<3);assert.equal(restored.text,'kept draft');
 });
+for (const viewport of [{width:390,height:844},{width:1280,height:900}]) test(`messages-below badge counts restored unread history and follows reading ${viewport.width}`, async t => {
+  const f = await setup(t, {hosted:true, viewport, state:{messages:Array.from({length:20},(_,i)=>ready(i+1))}, init:()=> {
+    if (!localStorage.getItem('wizard-manager:conversation:v1')) localStorage.setItem('wizard-manager:conversation:v1', JSON.stringify({rev:0,text:'keep draft',scroll:{pinned:false,anchorMessageId:5,offset:0},read:{version:2,seen:4,viewed:[],divider:5}}));
+  }});
+  const expected = () => f.frame.evaluate(() => {
+    const bottom = document.querySelector('#conversation').getBoundingClientRect().bottom;
+    const read = JSON.parse(localStorage.getItem('wizard-manager:conversation:v1')).read;
+    return [...document.querySelectorAll('.mgr-assistant[data-message-id]')].filter(n => Number(n.dataset.messageId)>read.seen && !read.viewed.includes(Number(n.dataset.messageId)) && n.getBoundingClientRect().bottom>bottom+1).length;
+  });
+  await f.page.waitForTimeout(350);
+  const first = await expected(); assert(first>0);
+  assert.equal(await f.frame.locator('#jump').textContent(), first+' new below ↓');
+  await f.frame.locator('#conversation').evaluate(e=>e.scrollTop+=600); await f.page.waitForTimeout(350);
+  const second = await expected(); assert(second<first);
+  assert.equal(await f.frame.locator('#jump').textContent(), second+' new below ↓');
+  const top = await f.frame.locator('#conversation').evaluate(e=>e.scrollTop);
+  f.state.messages.push(ready(21)); await f.poll();
+  assert.equal(await f.frame.locator('#conversation').evaluate(e=>e.scrollTop),top);
+  assert.equal(await f.frame.locator('#jump').textContent(),(await expected())+' new below ↓');
+  await f.page.reload(); f.frame=f.page.frames().find(x=>x.url().endsWith('/index.html')); await f.frame.waitForSelector('[data-message-id="21"]'); await f.page.waitForTimeout(350);
+  assert.equal(await f.frame.locator('#jump').textContent(),(await expected())+' new below ↓');
+  if(evidence) await f.page.screenshot({path:path.join(evidence,'messages-below-'+viewport.width+'.png')});
+  await f.frame.locator('#jump').click(); assert.equal(await f.frame.locator('#jump').isVisible(),false);
+  assert.equal(await f.frame.locator('#message').inputValue(),'keep draft');
+  await f.page.waitForTimeout(1000);
+  await f.frame.locator('#conversation').evaluate(e=>e.scrollTop=0); await f.page.waitForTimeout(350);
+  assert.equal(await f.frame.locator('#jump').textContent(),'↓ Latest','read history retains navigation without an unread badge');
+  assert.equal(f.posts.length,0);
+});
+
 test('hidden sources purge retained cards and receipt metadata without losing user text; recovery replays older IDs', async t => {
   const hidden = ready(1, 'Hidden source title');
   const f = await setup(t, {state:{messages:[hidden, user(2,'fixture-user','Keep my words'), ready(3,'Archived genuine result')], suppressed_sources:[]}});
@@ -357,7 +387,7 @@ test('all five appearance fixtures preserve draft, target, message identity, sel
   assert.equal(await f.page.evaluate(() => window.holds), 0, 'durably saved draft must not block updates');
   f.state.messages.push(ready(25, 'New result')); await f.poll();
   assert.equal(await f.frame.locator('#conversation').evaluate(n => n.scrollTop), top);
-  assert.match(await f.frame.locator('#jump').textContent(), /1 new below/);
+  assert.match(await f.frame.locator('#jump').textContent(), /\d+ new below/); // includes unread history already below the viewport
   assert.match(await f.frame.locator('#announcer').textContent(), /Ready: New result/);
   await f.frame.locator('#jump').click(); assert.equal(await f.frame.locator('#jump').isVisible(), false);
 });
