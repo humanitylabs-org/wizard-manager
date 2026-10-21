@@ -6,7 +6,7 @@ type: service
 category: app
 version: 0.1.0
 summary: An optional Archimedes conversation that delegates work and brings back concise Ready updates.
-license: GPL-3.0-only
+license: MIT
 source: https://github.com/humanitylabs-org/wizard-manager
 runtime:
   kind: runtipi
