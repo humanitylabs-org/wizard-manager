@@ -9,6 +9,7 @@ summary: An optional Archimedes conversation that delegates work and brings back
 license: MIT
 source: https://github.com/humanitylabs-org/wizard-manager
 runtime:
+  package: source
   kind: runtipi
   config: runtipi/config.json
   compose: runtipi/docker-compose.yml
@@ -38,6 +39,16 @@ health: /healthz
 ---
 
 # Manager
+
+## Packaging
+
+`runtime.package: source` runs the stdlib app directly from the pinned repository,
+mounted read-only at `/app`, on a digest-pinned official multi-architecture Python image.
+No custom image or embedded source payload is needed. `python3 app/package.py --check`
+verifies the generated recipe; the Dockerfile remains available for development.
+The App Manager must supply `APP_SOURCE_DIR` (wizard-app-manager#153); do not merge this
+recipe until that support ships in a Wizard release. Root-owned app-data binds are writable
+by running as root with all capabilities dropped, read-only root/source and no-new-privileges.
 
 An optional personal chat with Archimedes, alongside ordinary Chats. DeepSeek Flash answers briefly, delegates substantial requests through Wizard Agent Service (WAS), and compresses new Ready responses into linked updates. The module owns its conversation, dispatch receipts and delivery deduplication. WAS and Hermes remain unchanged.
 
