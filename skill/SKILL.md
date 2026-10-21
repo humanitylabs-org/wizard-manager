@@ -3,7 +3,7 @@ name: wizard-manager
 description: Use when operating the optional Archimedes Manager chat.
 version: 0.1.0
 author: Humanity Labs
-license: GPL-3.0-only
+license: MIT
 ---
 # Manager
 
