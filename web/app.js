@@ -11,7 +11,7 @@
   let saved = true, hold = null, loaded = false, connected = false, enabled = null, connectionFailed = false;
   let cursor = 0, jobs = [], refreshing = null, submitting = false, togglePending = null;
   let toggleUnknown = false, toggleError = '', pendingTarget = null, confirmLayer = null, optionsLayer = null;
-  let newBelow = 0, pinned = true, scrollFrame = 0, retrying = new Set(), jobErrors = new Set();
+  let pinned = true, scrollFrame = 0, retrying = new Set(), jobErrors = new Set();
   let restoring = true;
   // Seen receipts are separate from the stable catch-up boundary. Fetching never reads.
   let read = { seen: 0, viewed: [], divider: null }, wasVisible = false, returnAtEnd = false;
@@ -31,6 +31,7 @@
   function persistRead() { draft.read = { ...read, version: 2, viewed: [...read.viewed] }; persist(); }
   function observeRead() {
     if (!loaded || restoring) return;
+    paintJump();
     const on = visible();
     if (!on) {
       dwell.clear();
@@ -307,7 +308,20 @@
     const first = [...thread.querySelectorAll('[data-message-id]')].find(node => node.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top);
     draft.scroll = { pinned, anchorMessageId: first ? Number(first.dataset.messageId) : null, offset: first ? first.getBoundingClientRect().top - scroller.getBoundingClientRect().top : 0 };
   }
-  function toBottom() { scroller.scrollTop = scroller.scrollHeight; pinned = true; newBelow = 0; $('jump').hidden = true; saveScroll(); persist(); }
+  // Derive the badge from current unread rows and viewport geometry, including
+  // restored history. Arrival counters drift as the reader scrolls or reopens.
+  function paintJump() {
+    if (!loaded || restoring || !visible()) return;
+    const bounds = scroller.getBoundingClientRect();
+    if (bounds.height <= 0) return;
+    const below = [...messages.values()].filter(m => unread(m) &&
+      nodes.get(m.id)?.getBoundingClientRect().bottom > bounds.bottom + 1).length;
+    const jump = $('jump');
+    jump.hidden = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 8;
+    jump.textContent = below ? below + ' new below ↓' : '↓ Latest';
+    jump.setAttribute('aria-label', below ? below + ' unread ' + (below === 1 ? 'message' : 'messages') + ' below. Jump to latest' : 'Jump to latest message');
+  }
+  function toBottom() { scroller.scrollTop = scroller.scrollHeight; pinned = true; paintJump(); saveScroll(); persist(); }
   function reconcileSubmission() {
     const s = draft.sending; if (!s) return;
     const accepted = [...messages.values()].some(m => m.job_id === 'user:' + s.request_id || m.job_id === 'answer:' + s.request_id);
@@ -387,7 +401,6 @@
         scroller.scrollTop += divider.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 80;
       }
       pinned = false;
-      newBelow += newMessages.length; $('jump').textContent = newBelow + ' new below ↓'; $('jump').hidden = false;
       const recent = newMessages.filter(m => m.role === 'assistant').at(-1);
       if (recent) say(recent.kind === 'ready' ? 'Ready: ' + (recent.title || 'Work thread') : 'Archimedes: ' + recent.text.slice(0, 180));
     }
@@ -419,7 +432,7 @@
           else if (pinned) scroller.scrollTop = scroller.scrollHeight;
           saveScroll(); persist();
         }
-        renderControls(); return true;
+        renderControls(); paintJump(); return true;
       } catch (_) { connected = false; connectionFailed = true; renderControls(); return false; }
       finally { refreshing = null; }
     })();
@@ -514,8 +527,7 @@
   scroller.addEventListener('scroll', () => {
     if (restoring || !visible()) return;
     pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
-    if (pinned) { newBelow = 0; $('jump').hidden = true; }
-    if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; saveScroll(); persist(); });
+    if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; paintJump(); saveScroll(); persist(); });
   }, { passive: true });
   addEventListener('pagehide', () => { saveScroll(); persist(); });
   addEventListener('offline', renderControls);
@@ -528,6 +540,7 @@
       document.querySelector('.mgr').style.height = (window.visualViewport?.height || innerHeight) + 'px';
     } else document.querySelector('.mgr').style.removeProperty('height');
     resizeInput(); if (!restoring && visible()) scroller.scrollTop = top;
+    paintJump();
   }
   restore(); input.value = draft.text;
   $('header-portrait').append(portrait()); $('empty-portrait').append(portrait(true));
