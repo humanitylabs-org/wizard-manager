@@ -238,7 +238,7 @@ test('empty is honest; standalone and hosted identity, width, and transparent in
 });
 test('thin worker states keep outcome semantics without cards', async t => {
   const f=await setup(t,{state:{messages:[ready(1,'Done worker',{attention:JSON.stringify({state:'done',ask:'Nothing needed'})}),ready(2,'Needs worker',{attention:JSON.stringify({state:'needs_you',ask:'Reply GO'})}),ready(3,'Check worker',{attention:JSON.stringify({state:'check'})}),ready(4,'FYI worker',{attention:JSON.stringify({state:'fyi'})})]}});
-  assert.deepEqual(await f.frame.locator('.mgr-chip-state').allTextContents(),['done','needs you','your call','update']);
+  assert.deepEqual(await f.frame.locator('.mgr-chip-state').allTextContents(),['done','needs you · Reply GO','your call','update']);
   assert.equal(await f.frame.locator('.mgr-card').count(),0);
   assert.doesNotMatch(await f.frame.locator('[data-message-id="1"]').textContent(),/Nothing needed/);
 });
@@ -289,10 +289,11 @@ test('project reply survives context close and late context cannot reopen a clos
   assert.match(await f.frame.locator('.mgr-user').textContent(),/↪ to Reply worker/);
 });
 
-test('Ready content is inert, faithful structured ask; stable exact card targeting and Back layers', async t => {
-  const f = await setup(t, { hosted: true, state: { messages: [ready(1, 'First thread', { attention: JSON.stringify({ state: 'needs_approval', ask: 'May I publish this draft?', buttons: ['Approve everything'] }), text: '<img src=x onerror=alert(1)> Worker text.' }), ready(2, 'Second thread')] } });
+test('Ready preserves full paragraphs and keeps the inert ask in its chip; stable targeting and Back', async t => {
+  const f = await setup(t, { hosted: true, state: { messages: [ready(1, 'First thread', { attention: JSON.stringify({ state: 'needs_approval', ask: 'May I publish this draft?', buttons: ['Approve everything'] }), text: '<img src=x onerror=alert(1)> Worker text.\n\nThe full second paragraph stays in the conversation.' }), ready(2, 'Second thread')] } });
   assert.equal(await f.frame.locator('.mgr-summary img').count(), 0);
-  assert.equal(await f.frame.locator('[data-message-id="1"] .mgr-summary').textContent(), 'May I publish this draft?');
+  assert.equal(await f.frame.locator('[data-message-id="1"] .mgr-summary').textContent(), '<img src=x onerror=alert(1)> Worker text.\n\nThe full second paragraph stays in the conversation.');
+  assert.equal(await f.frame.locator('[data-ready-id="1"] .mgr-chip-state').textContent(), 'needs you · May I publish this draft?');
   assert.equal(await f.frame.locator('[data-message-id="1"] .mgr-text').count(), 1, 'one update, not a summary followed by a paraphrase');
   assert.equal(await f.frame.locator('.mgr-ask').count(), 0);
   assert.equal(await f.frame.getByRole('button', { name: 'Approve everything' }).count(), 0);
@@ -300,9 +301,7 @@ test('Ready content is inert, faithful structured ask; stable exact card targeti
   assert.equal(await f.frame.locator('[data-ready-id="1"]').getAttribute('aria-haspopup'), 'dialog');
   await f.frame.locator('#message').fill('Please approve the publication');
   await f.frame.locator('[data-ready-id="1"]').click();
-  await f.frame.locator('.mgr-context-summary summary').click();
-  assert.equal(await f.frame.locator('.mgr-context-summary p').textContent(), '<img src=x onerror=alert(1)> Worker text.');
-  assert.equal(await f.frame.locator('.mgr-context-summary img').count(), 0);
+  assert.equal(await f.frame.locator('.mgr-context-summary').isVisible(), false, 'the summary is already visible in chat');
   await f.frame.getByRole('button', {name:'Reply in this project', exact:true}).click();
   assert.match(await f.frame.locator('#confirmation').textContent(), /Reply to First thread instead/);
   await f.page.locator('#back').click();
