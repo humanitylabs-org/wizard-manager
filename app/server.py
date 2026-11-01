@@ -4,7 +4,8 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
-from manager import Manager, Problem
+from manager import Problem
+from projects import ProjectManager as Manager
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_ID = 'wizard-manager'
@@ -16,8 +17,8 @@ LOOPBACK = {f'127.0.0.1:{PORT}', f'localhost:{PORT}'}
 TRUSTED_HOSTS = LOOPBACK | {s.strip().lower() for s in os.environ.get('WIZARD_TRUSTED_HOSTS', '').split(',') if s.strip()}
 TRUSTED_ORIGINS = {'http://' + x for x in LOOPBACK} | {s.strip().lower() for s in os.environ.get('WIZARD_TRUSTED_ORIGINS', '').split(',') if s.strip()}
 TOOLS = [
-    {'name': 'manager_status', 'description': 'Read the optional Manager state and conversation.', 'inputSchema': {'type': 'object', 'properties': {}}},
-    {'name': 'manager_message', 'description': 'Send an explicit owner request to Manager. May delegate work to a normal thread. Never use for autonomous notifications or approval inference.', 'inputSchema': {'type': 'object', 'properties': {'text': {'type': 'string'}, 'request_id': {'type': 'string'}, 'reply_to': {'type': 'integer'}}, 'required': ['text', 'request_id']}},
+    {'name': 'manager_status', 'description': 'Read Project Chats state for one project.', 'inputSchema': {'type': 'object', 'properties': {'project_id': {'type': 'string'}}}},
+    {'name': 'manager_message', 'description': 'Send an explicit owner request to Manager. May delegate work to a normal thread. Never use for autonomous notifications or approval inference.', 'inputSchema': {'type': 'object', 'properties': {'project_id': {'type': 'string'}, 'text': {'type': 'string'}, 'request_id': {'type': 'string'}, 'reply_to': {'type': 'integer'}}, 'required': ['text', 'request_id']}},
     {'name': 'manager_enabled', 'description': 'Enable or pause the optional Manager at the owner request.', 'inputSchema': {'type': 'object', 'properties': {'enabled': {'type': 'boolean'}}, 'required': ['enabled']}}
 ]
 
@@ -37,7 +38,7 @@ def rpc(msg):
     elif method == 'tools/call':
         name, args = params.get('name'), params.get('arguments') or {}
         if name == 'manager_status':
-            value = manager.state()
+            value = manager.state(project_id=args.get('project_id', 'unsorted'))
         elif name == 'manager_message':
             value = manager.submit(args)
         elif name == 'manager_enabled':
@@ -82,7 +83,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, {'ok': True, 'app': APP_ID, 'version': '0.1.0', 'enabled': manager.enabled()})
             if path == '/api/state':
                 after = max(0, int(parse_qs(urlsplit(self.path).query).get('after', ['0'])[0]))
-                return self.send(200, manager.state(after))
+                project_id = parse_qs(urlsplit(self.path).query).get('project_id', ['unsorted'])[0]
+                return self.send(200, manager.state(after, project_id))
+            if path == '/api/projects':
+                return self.send(200, {'projects': manager.project_list()})
             if path == '/openapi.json':
                 return self.send(200, (ROOT / 'openapi.json').read_bytes())
             name = 'index.html' if path == '/' else path[1:]
@@ -90,6 +94,8 @@ class Handler(BaseHTTPRequestHandler):
             if kind and '/' not in name and not name.startswith('.') and (ROOT / 'web' / name).is_file():
                 return self.send(200, (ROOT / 'web' / name).read_bytes(), kind)
             return self.send(404, {'error': 'Not found.'})
+        except Problem as e:
+            return self.send(e.code, {'error': e.message})
         except (ValueError, TypeError):
             return self.send(400, {'error': 'Invalid query.'})
 
@@ -109,6 +115,8 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise Problem(400, 'Expected an object.')
             path = urlsplit(self.path).path
+            if path == '/api/read':
+                return self.send(200, manager.mark_read(body))
             if path == '/api/messages':
                 return self.send(202, manager.submit(body))
             if path == '/api/settings':

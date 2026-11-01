@@ -1,15 +1,15 @@
 {
-  "name": "Manager",
+  "name": "Project Chats",
   "id": "wizard-manager",
   "wizard_type": "service",
   "available": true,
-  "short_desc": "An optional Archimedes chat for quick answers and delegated work.",
+  "short_desc": "Project conversations, linked workers and short unread updates.",
   "author": "Humanity Labs",
   "port": 8799,
   "categories": [
     "utilities"
   ],
-  "description": "A separate personal chat using DeepSeek Flash, WAS task routing and linked Ready summaries. Configure runtime routes and credential before activation.",
+  "description": "One conversation per Wizard Space, with quick answers, explicit worker routing and short linked updates. Configure the single model route and WAS before activation.",
   "tipi_version": 1,
   "version": "0.1.0",
   "source": "https://github.com/humanitylabs-org/wizard-manager",

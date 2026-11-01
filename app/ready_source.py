@@ -72,15 +72,20 @@ class ReadySource:
         with closing(self.open()) as c:
             return int(c.execute('SELECT coalesce(max(id),0) FROM messages').fetchone()[0])
 
-    def read(self, after, limit=1000):
+    def read(self, after, limit=1000, allowed=None):
         with closing(self.open()) as c:
             # ID is the canonical insertion order. Compacted rows deliberately included.
             uid_column = 'm.message_uid' if self.has_uid else 'NULL'
+            # Scope content reads before touching messages; no recording/private content.
+            if allowed is not None and not allowed:
+                return [], self.head(), False
+            scope = '' if allowed is None else ' AND m.session_id IN (' + ','.join('?' for _ in allowed) + ')'
+            params = [int(after)] + ([] if allowed is None else sorted(allowed)) + [int(limit)]
             rows = c.execute(f'''SELECT {uid_column} AS message_uid,m.id,m.session_id,m.role,m.content,m.timestamp,m.finish_reason,m.display_kind,m.tool_calls
                                 FROM messages m JOIN sessions s ON s.id=m.session_id
                                 WHERE m.id>? AND m.role='assistant' AND s.parent_session_id IS NULL
                                   AND coalesce(s.hidden,0)=0 AND coalesce(s.archived,0)=0
-                                ORDER BY m.id LIMIT ?''', (int(after), int(limit))).fetchall()
+                                {scope} ORDER BY m.id LIMIT ?''', params).fetchall()
         events = []
         for row in rows:
             r = dict(row)
