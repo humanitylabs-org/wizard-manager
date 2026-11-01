@@ -1,5 +1,5 @@
 /* Isolated browser contracts. No live API: the HTTP server explicitly rejects /api.
- * Thales: CORE_CLIENT=/path/to/core/app-client.js PLAYWRIGHT_MODULE=/path/to/playwright
+ * Forum: CORE_CLIENT=/path/to/core/app-client.js PLAYWRIGHT_MODULE=/path/to/playwright
  * CHROMIUM_EXECUTABLE=/path/to/Chromium node --test tests/frontend.test.cjs
  * Optional FRONTEND_EVIDENCE_DIR retains screenshots on the remote worker.
  */
@@ -230,9 +230,9 @@ test('empty is honest; standalone and hosted identity, width, and transparent in
   assert.equal(await f.frame.locator('#thread li').count(), 0);
   assert.match(await f.frame.locator('#empty-copy').textContent(), /Talk to me here/);
   assert.equal(await f.frame.locator('.mgr-head').isVisible(), false);
-  assert.equal(await f.frame.locator('.mgr').evaluate(n => n.getBoundingClientRect().width), 640);
+  assert.equal(await f.frame.locator('.mgr').evaluate(n => n.getBoundingClientRect().width), 1440, 'the app fills the host after the intentional desktop-cap removal');
   assert.equal(await f.frame.locator('body').evaluate(n => getComputedStyle(n).backgroundColor), 'rgba(0, 0, 0, 0)');
-  assert.equal(await f.frame.locator('[aria-live]').count(), 1);
+  assert.equal(await f.frame.locator('[aria-live]').count(), 2, 'conversation announcements plus the scoped worker-report live region');
   assert.equal(await f.frame.locator('#announcer').textContent(), '');
   if (evidence) await f.page.screenshot({ path: path.join(evidence, 'empty-desktop.png') });
 });
@@ -292,12 +292,18 @@ test('project reply survives context close and late context cannot reopen a clos
 test('Ready content is inert, faithful structured ask; stable exact card targeting and Back layers', async t => {
   const f = await setup(t, { hosted: true, state: { messages: [ready(1, 'First thread', { attention: JSON.stringify({ state: 'needs_approval', ask: 'May I publish this draft?', buttons: ['Approve everything'] }), text: '<img src=x onerror=alert(1)> Worker text.' }), ready(2, 'Second thread')] } });
   assert.equal(await f.frame.locator('.mgr-summary img').count(), 0);
-  assert.match(await f.frame.locator('.mgr-ask').textContent(), /May I publish/);
+  assert.equal(await f.frame.locator('[data-message-id="1"] .mgr-summary').textContent(), 'May I publish this draft?');
+  assert.equal(await f.frame.locator('[data-message-id="1"] .mgr-text').count(), 1, 'one update, not a summary followed by a paraphrase');
+  assert.equal(await f.frame.locator('.mgr-ask').count(), 0);
   assert.equal(await f.frame.getByRole('button', { name: 'Approve everything' }).count(), 0);
   assert.equal(await f.frame.locator('.mgr-card').count(), 0);
   assert.equal(await f.frame.locator('[data-ready-id="1"]').getAttribute('aria-haspopup'), 'dialog');
   await f.frame.locator('#message').fill('Please approve the publication');
-  await f.frame.locator('[data-ready-id="1"]').click(); await f.frame.getByRole('button', {name:'Reply in this project', exact:true}).click();
+  await f.frame.locator('[data-ready-id="1"]').click();
+  await f.frame.locator('.mgr-context-summary summary').click();
+  assert.equal(await f.frame.locator('.mgr-context-summary p').textContent(), '<img src=x onerror=alert(1)> Worker text.');
+  assert.equal(await f.frame.locator('.mgr-context-summary img').count(), 0);
+  await f.frame.getByRole('button', {name:'Reply in this project', exact:true}).click();
   assert.match(await f.frame.locator('#confirmation').textContent(), /Reply to First thread instead/);
   await f.page.locator('#back').click();
   assert.equal(await f.frame.locator('#confirmation').isVisible(), false);
@@ -538,8 +544,12 @@ test('reading anchor and offset restore after reload without new-history announc
 test('orb receiver seals reply target and leaves later draft intact', async t => {
   const f = await setup(t, { hosted: true, state: { messages: [ready(1, 'First'), ready(2, 'Second')] } });
   await f.frame.locator('[data-message-id="1"] button').click();
+  await f.frame.getByRole('button', {name:'Reply in this project', exact:true}).click();
+  assert.equal(await f.frame.locator('#worker-context').evaluate(n => n.open), false);
   const target = await f.page.evaluate(() => domain.conversation.snapshot());
   await f.frame.locator('[data-message-id="2"] button').click();
+  await f.frame.getByRole('button', {name:'Reply in this project', exact:true}).click();
+  assert.equal(await f.frame.locator('#worker-context').evaluate(n => n.open), false);
   await f.frame.locator('#message').fill('Later draft');
   const result = await f.page.evaluate(target => domain.conversation.receive({ request_id: 'qa-orb-original', text: 'Voice original', target }, () => {}), target);
   assert.equal(result.accepted, true);
@@ -553,7 +563,8 @@ test('orb receiver seals reply target and leaves later draft intact', async t =>
 test('hosted source links save Manager draft and request the exact native canonical ID', async t => {
   const f = await setup(t, { hosted: true, state: { messages: [ready(1)] } });
   await f.frame.locator('#message').fill('Keep this draft');
-  await f.frame.locator('[data-message-id="1"] a').click();
+  await f.frame.locator('[data-message-id="1"] .mgr-context-chip').click();
+  await f.frame.getByRole('link', {name:'Open full thread', exact:true}).click();
   assert.equal(await f.page.evaluate(() => openedThread), 'thread/1');
   assert.equal((await f.draft()).text, 'Keep this draft');
   assert.match(f.page.url(), /\/host$/);
@@ -625,6 +636,85 @@ for (const viewport of [{width:390,height:844},{width:1280,height:900}]) test(`p
   await f.frame.locator('[data-project-id="alpha"]').click();
   assert.equal(await f.frame.locator('#message').inputValue(), 'Alpha draft');
   assert.equal(f.posts.length, 0, 'navigation and drafts never send a message');
+});
+
+test('Ready paraphrases render once; embedded asks, empty asks and unavailable sources retain meaning', async t => {
+  const ask = 'Open Connected accounts, then reply works <img src=x onerror=alert(1)>.';
+  const embedded = 'The screen is ready. Reply GO when you have checked it.';
+  const f = await setup(t, {state:{messages:[
+    ready(1, 'Legacy summary', {text:'The app is built and only your connection test remains.', attention:{state:'needs_you',ask,buttons:[{label:'Approve everything',url:'javascript:alert(1)'}]}}),
+    ready(2, 'Conversational summary', {text:embedded, attention:{state:'needs_input',ask:'reply GO when you have checked it.'}}),
+    ready(3, 'No action', {text:'The check passed.',attention:{state:'done',ask:'Nothing needed.'}}),
+    ready(4, 'Unavailable', {text:'Old card summary.',source_available:false,attention:{state:'needs_approval',ask:'May I publish this draft?'}}),
+    ready(5, 'No ask', {text:'Full summary stays.',attention:{ask:'   '}})
+  ]}});
+  assert.deepEqual(await f.frame.locator('.mgr-summary').allTextContents(), [ask,embedded,'The check passed.','May I publish this draft?','Full summary stays.']);
+  assert.equal(await f.frame.locator('#thread .mgr-text').count(),5);
+  assert.equal(await f.frame.locator('#thread img:not(.mgr-face),#thread .mgr-summary a').count(),0);
+  assert.equal(await f.frame.getByRole('button',{name:'Approve everything'}).count(),0);
+  assert.equal(await f.frame.locator('[data-ready-id="4"]').isEnabled(),false);
+  assert.equal(f.posts.length,0);
+});
+
+for (const viewport of [{width:390,height:844},{width:1280,height:900}]) test(`jump has a reserved lane outside conversation at every scroll position ${viewport.width}`, async t => {
+  const f = await setup(t,{hosted:true,viewport,state:{messages:Array.from({length:20},(_,i)=>ready(i+1))}});
+  await f.frame.locator('#message').fill('A taller composer\n'.repeat(5));
+  await f.frame.addStyleTag({content:'.mgr-jump { font-size:24px; min-height:56px }'});
+  for (const scroll of [0,230,600]) {
+    await f.frame.locator('#conversation').evaluate((n,top)=>{n.scrollTop=top;},scroll);
+    await f.page.waitForTimeout(350);
+    assert.equal(await f.frame.locator('#jump').isVisible(),true);
+    const geometry = await f.frame.evaluate(()=>{
+      const s=document.querySelector('#conversation').getBoundingClientRect(),j=document.querySelector('#jump').getBoundingClientRect(),row=document.querySelector('.mgr-row').getBoundingClientRect();
+      return {bottom:s.bottom,jumpTop:j.top,jumpBottom:j.bottom,rowTop:row.top};
+    });
+    assert(geometry.jumpTop>=geometry.bottom,'jump must never cover the clipped conversation, including middle-history chips');
+    assert(geometry.jumpBottom<=geometry.rowTop,'jump must not cover the composer');
+  }
+  if(evidence) await f.page.screenshot({path:path.join(evidence,'polish-clearance-'+viewport.width+'.png')});
+  await f.frame.locator('#jump').click();
+  await f.page.waitForTimeout(350);
+  assert.equal(await f.frame.locator('#jump').isVisible(),false);
+  assert.equal(await f.frame.locator('#message').inputValue(),'A taller composer\n'.repeat(5));
+  const atEnd=await f.frame.locator('#conversation').evaluate(n=>n.scrollHeight-n.scrollTop-n.clientHeight);
+  assert(atEnd<=8,'hiding the reserved row must keep the latest message visible');
+});
+
+test('needs-you accents follow live dark/light appearance; sheet close has only a keyboard focus ring', async t => {
+  let responseState='needs_input';
+  const f = await setup(t,{hosted:true,state:{messages:[ready(1,'Accent worker',{attention:{state:'needs_approval',ask:'Reply GO'}})]},route:async(route,req,url)=>{
+    if(url.pathname!=='/api/worker-context')return false;
+    await route.fulfill({json:{source_id:'thread/1',title:'Accent worker',state:responseState,text:'**Fixture report**'}});return true;
+  }});
+  await f.frame.locator('#message').fill('Keep draft across appearance changes');
+  let revision=0;
+  // Appearance protocol fixtures: the shared client, not app-local theme code, applies tokens.
+  for (const colorScheme of ['dark','light']) {
+    const theme={version:1,revision:++revision,skin:colorScheme==='dark'?'nebula':'obsidian-light',colorScheme,presentation:'immersive',tokens:{accent:colorScheme==='dark'?'#b99bff':'#1a1a1a',text:colorScheme==='dark'?'#f3efff':'#000000','text-secondary':colorScheme==='dark'?'#b9b0d8':'#2e2e2e','text-muted':colorScheme==='dark'?'#7d74a3':'#6b6b6b',border:colorScheme==='dark'?'rgba(205,190,255,.24)':'rgba(0,0,0,.32)',base:colorScheme==='dark'?'#05030c':'#ffffff',panel:colorScheme==='dark'?'#05030c':'#ffffff','panel-raised':colorScheme==='dark'?'#05030c':'#ffffff'}};
+    await f.page.evaluate(theme=>document.querySelector('iframe').contentWindow.postMessage({type:'wizard:appearance',appearance:theme},location.origin),theme);
+    await f.frame.waitForFunction(scheme=>document.documentElement.dataset.colorScheme===scheme,colorScheme);
+    const assertAccent=async selector=>assert.equal(await f.frame.locator(selector).evaluate(n=>getComputedStyle(n).color),await f.frame.locator('#project-back').evaluate(n=>getComputedStyle(n).color));
+    await assertAccent('.mgr-chip-state');
+    await f.frame.locator('.mgr-context-chip').click();
+    await f.frame.locator('.mgr-context-report strong').waitFor();
+    await assertAccent('.mgr-context-state');
+    const close=f.frame.getByRole('button',{name:'Close worker context',exact:true});
+    await f.frame.locator('.mgr-context-report').click();
+    const normal=await close.evaluate(n=>({border:getComputedStyle(n).borderTopWidth,shadow:getComputedStyle(n).boxShadow,outline:getComputedStyle(n).outlineStyle}));
+    assert.deepEqual(normal,{border:'0px',shadow:'none',outline:'none'});
+    await f.page.keyboard.press('Tab');
+    await close.focus();
+    assert.equal(await close.evaluate(n=>n.matches(':focus-visible')),true);
+    assert.equal(await close.evaluate(n=>getComputedStyle(n).outlineWidth),'2px');
+    if(evidence) await f.page.screenshot({path:path.join(evidence,'polish-overlay-'+colorScheme+'.png')});
+    await close.click();
+    assert.equal(await f.frame.locator('#message').inputValue(),'Keep draft across appearance changes');
+  }
+  responseState='done';
+  await f.frame.locator('.mgr-context-chip').click();await f.frame.locator('.mgr-context-report strong').waitFor();
+  assert.equal(await f.frame.locator('.mgr-context-state').textContent(),'done');
+  assert.equal(await f.frame.locator('.mgr-context-state').evaluate(n=>n.classList.contains('needs-you')),false,'resolved results must not retain the attention accent');
+  assert.equal(f.posts.length,0);
 });
 
 test('project switch rejects delayed previous-project history and pins send project', async t => {
