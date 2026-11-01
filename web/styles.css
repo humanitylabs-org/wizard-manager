@@ -64,7 +64,7 @@ html.wz-hosted .mgr-head, html[data-wz-hosted] .mgr-head { display:none; }
 @media (prefers-reduced-motion:reduce) { .mgr * { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
 
 /* Context and project list extend Appearance v1 roles. */
-.mgr-context-chip { display:flex; align-items:center; gap:8px; max-width:100%; min-height:32px; margin-top:9px; padding:5px 10px; border:1px solid var(--wz-border); border-radius:var(--wz-radius-pill,999px); background:var(--wz-surface); color:var(--wz-text-secondary); font-size:var(--wz-text-xs,12px); text-align:left; }
+.mgr-context-chip { display:flex; align-items:center; gap:8px; max-width:100%; min-height:32px; margin-top:9px; padding:5px 10px; border:1px solid var(--wz-border); border-radius:var(--wz-radius-pill,999px); background:var(--wz-surface); color:var(--wz-text-secondary); font-size:var(--wz-text-xs,0.75rem); text-align:left; }
 .mgr-context-chip:hover { border-color:var(--wz-accent); color:var(--wz-text); }
 .mgr-context-chip:active { transform:scale(.98); background:var(--wz-accent-soft); }
 .mgr-chip-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -74,18 +74,18 @@ html.wz-hosted .mgr-head, html[data-wz-hosted] .mgr-head { display:none; }
 .mgr-context[open] { display:flex; flex-direction:column; }
 .mgr-context::backdrop { background:var(--wz-overlay); }
 .mgr-context .mgr-modal-head { flex-shrink:0; gap:14px; }
-.mgr-context .mgr-modal-head h2 { font-size:var(--wz-text-lg,18px); overflow-wrap:anywhere; }
-.mgr-context-state { margin:4px 0 14px; color:var(--wz-text-muted); font-size:var(--wz-text-xs,12px); }
-.mgr-context-report { overflow:auto; overscroll-behavior:contain; min-height:70px; font-size:var(--wz-text-md,15px); line-height:1.6; overflow-wrap:anywhere; }
+.mgr-context .mgr-modal-head h2 { font-size:var(--wz-text-lg,1.125rem); overflow-wrap:anywhere; }
+.mgr-context-state { margin:4px 0 14px; color:var(--wz-text-muted); font-size:var(--wz-text-xs,0.75rem); }
+.mgr-context-report { overflow:auto; overscroll-behavior:contain; min-height:70px; font-size:var(--wz-text-md,0.9375rem); line-height:1.6; overflow-wrap:anywhere; }
 .mgr-context-report :first-child { margin-top:0; }
 .mgr-context-report pre { overflow:auto; padding:12px; border-radius:var(--wz-radius,10px); background:var(--wz-surface); }
 .mgr-context-report a { color:var(--wz-accent); }
 .mgr-context-report table { display:block; max-width:100%; overflow:auto; border-collapse:collapse; }
 .mgr-context-report td,.mgr-context-report th { padding:6px; border:1px solid var(--wz-border); }
 .mgr-context-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-shrink:0; margin-top:16px; padding-top:14px; border-top:1px solid var(--wz-border); }
-.mgr-context-actions button { padding:10px 14px; border-radius:var(--wz-radius,10px); background:var(--wz-accent-soft); color:var(--wz-accent); font-size:var(--wz-text-sm,13px); }
-.mgr-context-actions a { color:var(--wz-text-muted); font-size:var(--wz-text-xs,12px); }
-.project-badge-slot { width:24px; min-width:24px; text-align:center; color:var(--wz-accent); font-size:var(--wz-text-xs,12px); font-weight:700; }
+.mgr-context-actions button { padding:10px 14px; border-radius:var(--wz-radius,10px); background:var(--wz-accent-soft); color:var(--wz-accent); font-size:var(--wz-text-sm,0.8125rem); }
+.mgr-context-actions a { color:var(--wz-text-muted); font-size:var(--wz-text-xs,0.75rem); }
+.project-badge-slot { width:24px; min-width:24px; text-align:center; color:var(--wz-accent); font-size:var(--wz-text-xs,0.75rem); font-weight:700; }
 .project-running:empty,#project-running:empty { display:none; }
 @media(max-width:580px) {
   .mgr-context { width:100%; max-width:none; max-height:88%; margin:auto 0 0; padding:18px 18px max(20px,env(safe-area-inset-bottom)); border-radius:var(--wz-radius-lg,18px) var(--wz-radius-lg,18px) 0 0; }
