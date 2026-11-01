@@ -391,7 +391,7 @@ test('all five appearance fixtures preserve draft, target, message identity, sel
   f.state.messages.push(ready(25, 'New result')); await f.poll();
   assert.equal(await f.frame.locator('#conversation').evaluate(n => n.scrollTop), top);
   assert.match(await f.frame.locator('#jump').textContent(), /\d+ new below/); // includes unread history already below the viewport
-  assert.match(await f.frame.locator('#announcer').textContent(), /Ready: New result/);
+  assert.match(await f.frame.locator('#announcer').textContent(), /Update: New result/);
   await f.frame.locator('#jump').click(); assert.equal(await f.frame.locator('#jump').isVisible(), false);
 });
 test('pagination drains beyond 1000 messages before validating restored reply target', async t => {
