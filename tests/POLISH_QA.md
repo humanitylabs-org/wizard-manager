@@ -40,6 +40,24 @@ phone and desktop jump clearance, and live Nebula/Light accents/keyboard focus.
 The complete staged command therefore registers **47 cases** (42 + 5), not a
 filtered subset. Registration counting is not a claim that Playwright passed.
 
+## Appearance fixture correction after the first forum run
+
+The `polish-18dca45` run timed out in the new appearance case before any color
+assertion. Both its pinned shared client and the current `wizard-ux` client set
+`data-color-scheme`, but only after validating **all 14** Appearance v1 color
+roles. The fixture omitted `canvas`, `chrome`, `overlay`, `surface`,
+`surface-raised`, `accent-soft`, `on-accent`, and `reader-surface`; the extra
+opaque `panel` roles do not replace those required roles. This was an invalid
+test payload, not a different attribute name or an app accent bug.
+
+The corrected fixture sends the complete payload through the real shared
+client, waits for its revision-specific ACK, and retains the actual
+`data-color-scheme` wait. Accent assertions now check the exact expected RGB
+values for both schemes rather than comparing two controls that might both
+remain on the fallback. No app-local appearance implementation was added.
+The branch was rebased onto main `ec8f65e` (including the Sonnet backend change).
+The case count stays 47; a fresh complete forum run is still required.
+
 ## Verification and release hold
 
 Locally required:

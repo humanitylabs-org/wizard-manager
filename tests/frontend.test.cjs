@@ -688,12 +688,31 @@ test('needs-you accents follow live dark/light appearance; sheet close has only 
   }});
   await f.frame.locator('#message').fill('Keep draft across appearance changes');
   let revision=0;
-  // Appearance protocol fixtures: the shared client, not app-local theme code, applies tokens.
+  // Appearance v1 requires every shared color token, including ones this app
+  // does not read. Partial payloads are rejected before data-color-scheme is set.
+  // Keep the real client responsible for validation, token application and ACK.
+  await f.page.evaluate(() => {
+    window.appearanceAcks=[];
+    addEventListener('message',event=>{
+      if(event.source===document.querySelector('iframe').contentWindow && event.origin===location.origin && event.data?.type==='wizard:appearance:ack') window.appearanceAcks.push(event.data.revision);
+    });
+  });
   for (const colorScheme of ['dark','light']) {
-    const theme={version:1,revision:++revision,skin:colorScheme==='dark'?'nebula':'obsidian-light',colorScheme,presentation:'immersive',tokens:{accent:colorScheme==='dark'?'#b99bff':'#1a1a1a',text:colorScheme==='dark'?'#f3efff':'#000000','text-secondary':colorScheme==='dark'?'#b9b0d8':'#2e2e2e','text-muted':colorScheme==='dark'?'#7d74a3':'#6b6b6b',border:colorScheme==='dark'?'rgba(205,190,255,.24)':'rgba(0,0,0,.32)',base:colorScheme==='dark'?'#05030c':'#ffffff',panel:colorScheme==='dark'?'#05030c':'#ffffff','panel-raised':colorScheme==='dark'?'#05030c':'#ffffff'}};
+    const dark=colorScheme==='dark',base=dark?'#05030c':'#ffffff';
+    const theme={version:1,revision:++revision,skin:dark?'nebula':'obsidian-light',colorScheme,presentation:'immersive',tokens:{
+      canvas:base,base,chrome:base,overlay:dark?'rgba(5,3,12,.72)':'rgba(0,0,0,.32)',
+      surface:dark?'#171126':'#f2f2f2','surface-raised':dark?'#241a38':'#e5e5e5',
+      text:dark?'#f3efff':'#000000','text-secondary':dark?'#b9b0d8':'#2e2e2e','text-muted':dark?'#7d74a3':'#6b6b6b',
+      border:dark?'rgba(205,190,255,.24)':'rgba(0,0,0,.32)',accent:dark?'#b99bff':'#1a1a1a',
+      'accent-soft':dark?'rgba(185,155,255,.16)':'rgba(0,0,0,.08)','on-accent':dark?'#05030c':'#ffffff','reader-surface':base,
+      panel:base,'panel-raised':base
+    }};
     await f.page.evaluate(theme=>document.querySelector('iframe').contentWindow.postMessage({type:'wizard:appearance',appearance:theme},location.origin),theme);
+    await f.page.waitForFunction(rev=>window.appearanceAcks.includes(rev),theme.revision);
     await f.frame.waitForFunction(scheme=>document.documentElement.dataset.colorScheme===scheme,colorScheme);
-    const assertAccent=async selector=>assert.equal(await f.frame.locator(selector).evaluate(n=>getComputedStyle(n).color),await f.frame.locator('#project-back').evaluate(n=>getComputedStyle(n).color));
+    const expectedAccent=dark?'rgb(185, 155, 255)':'rgb(26, 26, 26)';
+    const assertAccent=async selector=>assert.equal(await f.frame.locator(selector).evaluate(n=>getComputedStyle(n).color),expectedAccent);
+    await assertAccent('#project-back');
     await assertAccent('.mgr-chip-state');
     await f.frame.locator('.mgr-context-chip').click();
     await f.frame.locator('.mgr-context-report strong').waitFor();
