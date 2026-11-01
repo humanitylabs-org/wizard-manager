@@ -5,6 +5,8 @@
   const core = window.WizardApp?.version === 1 ? window.WizardApp : null;
   let KEY = 'wizard-manager:conversation:v1';
   let projectMode = false, activeProject = null, projectSnapshot = [], serverReadAt = 0;
+  let projectGeneration = 0, historyBefore = null, hasOlder = false, loadingOlder = false;
+  let metadataRevision = '', metadataAt = 0, failures = 0, retryTimer = 0, stateReceived=false, visibilityRevision='';
   const input = $('message'), scroller = $('conversation'), thread = $('thread');
   const messages = new Map(), nodes = new Map(), jobNodes = new Map();
   let suppressedSources = new Set(), suppressSourceUpdates = false;
@@ -37,7 +39,7 @@
     }
   }
   function observeRead() {
-    if (!loaded || restoring) return;
+    if (!loaded || restoring || !connected) return;
     paintJump();
     const on = visible();
     if (!on) {
@@ -154,7 +156,7 @@
  a.dataset.wizardNativeThread = m.source_id; a.target = '_top';
     a.addEventListener('click', event => {
       if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      event.preventDefault(); saveScroll();
+      event.preventDefault(); if (!connected) { void refresh(); return; } saveScroll();
       if (!persist()) { renderControls(); say('Draft couldn’t be saved. Keep this window open.'); return; }
       try {
         if (core?.nav?.openThread(m.source_id)) { observeRead(); return; }
@@ -235,6 +237,7 @@
     return chip;
   }
   async function openContext(m, opener) {
+    if (!connected) { void refresh(); return; }
     if (!source(m)) return;
     if (contextDialog.open) closeContext();
     contextOpener = opener; contextMessage = m;
@@ -381,7 +384,7 @@
       else if (toggleUnknown) node.append(element('span', '', 'Couldn’t confirm Manager’s state.'), action('Check again', () => refresh()));
       else if (!navigator.onLine) node.append(element('span', '', saved ? 'You’re offline. Your draft is saved on this device.' : 'You’re offline. Keep this window open to retain your draft.'));
       else if (!connected && connectionFailed) node.append(element('span', '', 'Can’t reach Manager right now.'), action('Try again', () => refresh()));
-      else if (!loaded) node.append(element('span', '', connected ? 'Loading conversation…' : 'Connecting to Manager…'), action('Try again', () => refresh()));
+      else if (!loaded) node.append(element('span', '', 'Loading conversation…'));
       else if (toggleError) node.append(element('span', '', toggleError), action('Try again', () => setEnabled(!enabled)));
       else if (enabled === false) node.append(element('span', '', 'Manager is off. Work already started continues in Chats.'), action('Turn on', () => setEnabled(true)));
     });
@@ -443,7 +446,8 @@
   function merge(data) {
     if (typeof data.enabled !== 'boolean' || !Array.isArray(data.messages) || !Array.isArray(data.jobs)) throw new Error('Invalid state');
     const beforeTop = scroller.scrollTop;
-    const blocked = new Set(data.suppressed_sources || []);
+    const blocked = new Set(data.suppressed_sources || [...suppressedSources]);
+    if (data.visibility_revision) visibilityRevision=data.visibility_revision;
     const restoredSources = (suppressSourceUpdates && !data.suppress_source_updates) || [...suppressedSources].some(id => !blocked.has(id));
     suppressSourceUpdates = data.suppress_source_updates === true;
     const sourceBlocked = id => !!id && (suppressSourceUpdates || blocked.has(id));
@@ -464,7 +468,7 @@
       draft.sending.target = null; draft.sending.unavailable = true;
     }
     if (removed.size) say('');
-    const nextKey = JSON.stringify(data.threads || []);
+    const nextKey = Array.isArray(data.threads) ? JSON.stringify(data.threads) : inventoryKey;
     if (nextKey !== inventoryKey) {
       inventoryKey = nextKey; resolveThreads = window.ManagerThreadLinks.resolver(data.threads);
       const top = scroller.scrollTop;
@@ -517,24 +521,76 @@
     // DOM nodes and user drafts survive; deduplication keeps their identity.
     return restoredSources;
   }
+  function cacheConversation() {
+    if (!activeProject) return;
+    try {
+      const cached=[...messages.values()].sort((a,b)=>a.id-b.id).slice(-50);
+      const snapshot = {at:Date.now(),project_id:activeProject,enabled,messages:cached,jobs:[],next_after:cursor,has_older:hasOlder || messages.size>cached.length,next_before:cached[0]?.id || historyBefore,suppressed_sources:[...suppressedSources]};
+      localStorage.setItem(KEY + ':snapshot:v1',JSON.stringify(snapshot));
+      localStorage.setItem('wizard-manager:projects:v1',JSON.stringify(projectSnapshot));
+    } catch (_) { /* A cache quota failure must not endanger the separate draft. */ }
+  }
+  function paintCachedConversation() {
+    try {
+      const data=JSON.parse(localStorage.getItem(KEY + ':snapshot:v1') || 'null');
+      if (!data || data.project_id!==activeProject || Date.now()-data.at>86400000 || !Array.isArray(data.messages)) return;
+      merge(data); loaded=true; stateReceived=true; connected=false; hasOlder=!!data.has_older; historyBefore=data.next_before;
+      restoring=false; resizeInput(); pinned=draft.scroll?.pinned!==false;
+      const anchor=nodes.get(draft.scroll?.anchorMessageId);
+      if (anchor) scroller.scrollTop+=anchor.getBoundingClientRect().top-scroller.getBoundingClientRect().top-(Number(draft.scroll.offset)||0);
+      else scroller.scrollTop=scroller.scrollHeight;
+      renderControls();
+    } catch (_) { /* Treat an invalid cache as a cold open, never an app error. */ }
+  }
+  async function refreshMetadata(selected, generation) {
+    metadataAt=Date.now();
+    try {
+      const data=await api('api/metadata?project_id='+encodeURIComponent(selected||'unsorted')+'&revision='+encodeURIComponent(metadataRevision));
+      if (selected!==activeProject || generation!==projectGeneration || data.unchanged) return;
+      metadataRevision=data.revision || '';
+      if (Array.isArray(data.threads)) {
+        inventoryKey=JSON.stringify(data.threads); resolveThreads=window.ManagerThreadLinks.resolver(data.threads);
+        for (const entry of richText.values()) updateText(entry);
+      }
+      // Worker inventory and model receipts remain available on demand in metadata.
+    } catch (_) { metadataAt=0; }
+  }
+  async function loadOlder() {
+    if (!activeProject || !hasOlder || loadingOlder || !connected) return;
+    loadingOlder=true; const selected=activeProject,generation=projectGeneration;
+    const anchor=[...thread.querySelectorAll('[data-message-id]')].find(n=>n.getBoundingClientRect().bottom>scroller.getBoundingClientRect().top);
+    const top=anchor?.getBoundingClientRect().top;
+    try {
+      const data=await api('api/state?project_id='+encodeURIComponent(selected)+'&before='+historyBefore+'&limit=50');
+      if (selected!==activeProject || generation!==projectGeneration) return;
+      merge(data); historyBefore=data.next_before; hasOlder=!!data.has_older;
+      if (anchor?.isConnected) scroller.scrollTop+=anchor.getBoundingClientRect().top-top;
+      cacheConversation();
+    } catch (_) { /* Retry on the next scroll; retain the current conversation. */ }
+    finally { if (generation===projectGeneration) loadingOlder=false; }
+  }
   async function refresh() {
     if (refreshing) return refreshing;
+    const selected = activeProject, generation = projectGeneration;
+    if (Date.now()-metadataAt>10000) void refreshMetadata(selected,generation);
     refreshing = (async () => {
       try {
-        // state is paged by ascending integer id; drain full pages before validating restored targets.
+        // A cold open gets the newest window. Subsequent polls only fetch deltas.
+
         let page, replay;
         do {
           const before = cursor;
-          const selected = activeProject;
-          page = await api('api/state?after=' + cursor + '&project_id=' + encodeURIComponent(selected || 'unsorted'));
-          if (selected !== activeProject) return false;
+          page = await api('api/state?project_id=' + encodeURIComponent(selected || 'unsorted') + (stateReceived ? '&after=' + cursor : '') + '&limit='+(selected?50:1)+'&visibility_revision='+visibilityRevision);
+          if (selected !== activeProject || generation !== projectGeneration) return false;
           if (page.projects) { projectMode = true; renderProjects(page.projects); }
-          if (projectMode && !activeProject) { enabled = page.enabled; connected = true; loaded = true; renderControls(); return true; }
-          replay = merge(page);
+          if (projectMode && !activeProject) { enabled = page.enabled; connected = true; loaded = true; stateReceived=true; cursor=page.next_after || 0; failures=0; clearTimeout(retryTimer); renderControls(); return true; }
+          replay = merge(page); stateReceived=true;
+          if (typeof page.has_older==='boolean') { hasOlder=page.has_older; historyBefore=page.next_before; }
+          cacheConversation();
           if ((page.has_more || page.messages.length) && cursor <= before) throw new Error('State cursor did not advance');
-          if (replay) cursor = 0;
+          if (replay) { cursor = 0; stateReceived=false; metadataAt=0; void refreshMetadata(selected,generation); }
         } while (replay || (page.has_more ?? page.messages.length === 1000));
-        loaded = true;
+        loaded = true; failures=0; clearTimeout(retryTimer);
         if (restoring) {
           restoring = false; resizeInput(); pinned = draft.scroll?.pinned !== false;
           const anchor = nodes.get(draft.scroll?.anchorMessageId);
@@ -546,8 +602,12 @@
           saveScroll(); persist();
         }
         renderControls(); paintJump(); return true;
-      } catch (_) { connected = false; connectionFailed = true; renderControls(); return false; }
-      finally { refreshing = null; }
+      } catch (_) {
+        if (selected !== activeProject || generation !== projectGeneration) return false;
+        connected = false; connectionFailed = ++failures >= 3; renderControls();
+        clearTimeout(retryTimer); retryTimer=setTimeout(()=>void refresh(),Math.min(5000,500*2**(failures-1))); return false;
+      }
+      finally { if (generation===projectGeneration) refreshing = null; }
     })();
     return refreshing;
   }
@@ -639,6 +699,7 @@
   };
   scroller.addEventListener('scroll', () => {
     if (restoring || !visible()) return;
+    if (scroller.scrollTop < 80) void loadOlder();
     pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
     if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; paintJump(); saveScroll(); persist(); });
   }, { passive: true });
@@ -658,6 +719,7 @@
   function renderProjects(projects) {
     if (!Array.isArray(projects) || !$('project-list')) return;
     projectSnapshot = projects;
+    try { localStorage.setItem('wizard-manager:projects:v1',JSON.stringify(projects)); } catch (_) {}
     $('project-list').hidden = !!activeProject;
     $('project-nav').hidden = !activeProject;
     scroller.hidden = !activeProject; $('compose').hidden = !activeProject;
@@ -689,6 +751,9 @@
     if (activeProject) { saveScroll(); if (!persist()) return; }
     // Paint the destination before any I/O. An in-flight state response is
     // pinned to its project and discarded by refresh when the selection changes.
+    projectGeneration++; refreshing=null; clearTimeout(retryTimer); failures=0;
+    metadataAt=0; metadataRevision=''; stateReceived=false; visibilityRevision=''; historyBefore=null; hasOlder=false; loadingOlder=false;
+    connected=false; connectionFailed=false;
     closeContext(); activeProject = pid;
     renderProjects(projectSnapshot);
     cursor = 0; loaded = false; restoring = true; serverReadAt = 0;
@@ -698,9 +763,8 @@
     draft = {rev: 0, text: '', target: null, sending: null, scroll: {pinned: true}, receipts: {}};
     KEY = 'wizard-manager:project:' + (pid || 'unsorted') + ':v1';
     saved = true; restore(); input.value = draft.text;
-    renderControls(); resizeInput(); core?.back?.changed?.();
-    const pending = refreshing || Promise.resolve();
-    pending.finally(() => { void refresh(); });
+    paintCachedConversation(); renderControls(); resizeInput(); core?.back?.changed?.();
+    void refresh();
   }
   if ($('project-back')) $('project-back').onclick = () => selectProject(null);
   restore(); input.value = draft.text;
@@ -736,6 +800,7 @@
     core.theme.onChange(viewport);
   }
   window.visualViewport?.addEventListener('resize', viewport); addEventListener('resize', viewport);
+  try { const cachedProjects=JSON.parse(localStorage.getItem('wizard-manager:projects:v1')||'null'); if (Array.isArray(cachedProjects)) { projectMode=true; renderProjects(cachedProjects); } } catch (_) {}
   viewport(); renderControls(); refresh();
   setInterval(observeRead, 250);
   setInterval(() => { if (visible() && navigator.onLine && togglePending === null) refresh(); }, 5000);

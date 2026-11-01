@@ -1,5 +1,6 @@
 """Manager HTTP/API/MCP adapter. Gateway authentication, loopback app listener."""
 import json
+import gzip
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -64,7 +65,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def send(self, code, body=None, mime='application/json'):
         payload = body if isinstance(body, bytes) else b'' if body is None else json.dumps(body).encode()
+        compressed = len(payload) > 1024 and 'gzip' in self.headers.get('Accept-Encoding', '')
+        if compressed: payload = gzip.compress(payload, compresslevel=3)
         self.send_response(code)
+        if compressed: self.send_header('Content-Encoding', 'gzip')
+        self.send_header('Vary', 'Accept-Encoding')
         for key, val in {'Content-Type': mime, 'Content-Length': str(len(payload)), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; img-src 'self' data:"}.items():
             self.send_header(key, val)
         self.end_headers()
@@ -81,10 +86,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == '/healthz':
                 return self.send(200, {'ok': True, 'app': APP_ID, 'version': '0.3.0', 'enabled': manager.enabled()})
+            if path == '/api/metadata':
+                query = parse_qs(urlsplit(self.path).query)
+                return self.send(200, manager.metadata(query.get('project_id', ['unsorted'])[0], query.get('revision', [None])[0]))
             if path == '/api/state':
-                after = max(0, int(parse_qs(urlsplit(self.path).query).get('after', ['0'])[0]))
-                project_id = parse_qs(urlsplit(self.path).query).get('project_id', ['unsorted'])[0]
-                return self.send(200, manager.state(after, project_id))
+                query = parse_qs(urlsplit(self.path).query)
+                return self.send(200, manager.state(max(0, int(query['after'][0])) if 'after' in query else None, query.get('project_id', ['unsorted'])[0], max(1, int(query['before'][0])) if 'before' in query else None, int(query.get('limit', ['50'])[0]), query.get('visibility_revision', [None])[0]))
             if path == '/api/update-history':
                 query = parse_qs(urlsplit(self.path).query)
                 return self.send(200, manager.update_history(query.get('project_id', ['unsorted'])[0], int(query.get('message_id', ['0'])[0]), int(query.get('before', ['0'])[0])))

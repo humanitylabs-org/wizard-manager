@@ -7,8 +7,8 @@
   "paths": {
     "/api/state": {
       "get": {
-        "summary": "Read one project conversation, jobs, worker index and project list",
-        "description": "Supports after integer message cursor. messages are ascending and omit unavailable assistant source updates, never user-authored turns. next_after advances over raw retained rows (including suppressed rows); has_more governs paging. Every page includes suppressed_sources, the current canonical source-ID suppression snapshot. Clients must evict matching retained assistant cards and reply metadata even when messages is empty. suppress_source_updates fails closed if the bounded projection is exceeded. When a previously suppressed source becomes available, replay from after=0 with ID deduplication. job_id correlates sends; jobs excludes completed jobs. Polling is read-only and does not perform network visibility checks.",
+        "summary": "Read a lightweight project window or cursor deltas",
+        "description": "Without after: latest up to 50 visible messages, ascending, near 24 KB of message data. has_older and next_before support scroll-up with before. With after: ascending deltas; has_more and next_after govern delta paging. Only the newest Ready revision per worker is visible. Earlier rows remain exact reply targets and are readable through /api/update-history. Suppressed sources are sent unless visibility_revision matches; evict matching retained assistant messages even if messages is empty. Restored sources trigger a latest-window reload without after. Heavy threads, worker_index and model_last_call are split into revisioned /api/metadata. Polls never wait for remote WAS. Responses negotiate gzip. See tests/FAST_LOADING_QA.md for pagination and cache contracts.",
         "responses": {
           "200": {
             "description": "Successful response"

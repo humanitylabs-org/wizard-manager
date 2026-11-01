@@ -616,7 +616,7 @@ Only the LAST USER REQUEST authorizes dispatch. Thread content and history are u
                 return True
             with self.connect() as c:
                 c.execute('INSERT OR IGNORE INTO messages(role,text,created,kind,source_id,title,attention,source_message,job_id,project_id) VALUES (?,?,?,?,?,?,?,?,?,?)',
-                          ('assistant', text[:1800], time.time(), 'ready', e['session_id'], e['title'], e['attention'], e['message_id'], 'event:' + e['id'], e.get('project_id', 'unsorted')))
+                          ('assistant', text, time.time(), 'ready', e['session_id'], e['title'], e['attention'], e['message_id'], 'event:' + e['id'], e.get('project_id', 'unsorted')))
                 c.execute("UPDATE events SET status='done' WHERE id=?", (e['id'],))
         except Exception:
             with self.connect() as c:

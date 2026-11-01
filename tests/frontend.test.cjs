@@ -49,7 +49,14 @@ async function setup(t, options = {}) {
     const req = route.request(), url = new URL(req.url());
     if (custom && await custom(route, req, url)) return;
     const fulfill = data => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) });
-    if (url.pathname === '/api/state') return fulfill({ ...state, messages: state.messages.filter(m => m.id > Number(url.searchParams.get('after') || 0)).slice(0, 1000) });
+    if (url.pathname === '/api/metadata') return fulfill({revision:'fixture-meta',unchanged:true});
+    if (url.pathname === '/api/state') {
+      const forward=url.searchParams.has('after'),before=Number(url.searchParams.get('before')||0);
+      const eligible=state.messages.filter(m=>before?m.id<before:!forward||m.id>Number(url.searchParams.get('after')));
+      const messages=forward&&!before?eligible.slice(0,50):eligible.slice(-50),more=eligible.length>messages.length;
+      return fulfill({...state,messages,next_after:forward&&more?messages.at(-1).id:(state.messages.at(-1)?.id||0),has_more:forward&&!before&&more,next_before:messages[0]?.id||before,has_older:forward&&!before?null:more});
+    }
+    if (url.pathname === '/api/read') return fulfill({read:true});
     if (url.pathname === '/api/update-history') return fulfill({history:[],has_more:false,before:0});
     if (url.pathname === '/api/worker-context') {
       const m = state.messages.find(m => m.id === Number(url.searchParams.get('message_id')));
@@ -70,7 +77,7 @@ async function setup(t, options = {}) {
   if (options.init) await context.addInitScript(options.init);
   await page.goto(origin + (options.hosted ? '/host' : '/index.html'));
   const frame = options.hosted ? page.frames().find(f => f.url().endsWith('/index.html')) : page;
-  await frame.waitForFunction(() => !document.getElementById('notice').textContent.includes('Connecting'));
+  await frame.waitForFunction(() => !/Connecting|Loading conversation/.test(document.getElementById('notice').textContent));
   const poll = async () => { await frame.evaluate(() => window.dispatchEvent(new Event('online'))); await page.waitForTimeout(100); };
   const draft = () => frame.evaluate(() => JSON.parse(localStorage.getItem('wizard-manager:conversation:v1')));
   return { page, frame, context, state, posts, poll, draft, custom: fn => { custom = fn; } };
@@ -468,12 +475,15 @@ test('all five appearance fixtures preserve draft, target, message identity, sel
   assert.match(await f.frame.locator('#announcer').textContent(), /Update: New result/);
   await f.frame.locator('#jump').click(); assert.equal(await f.frame.locator('#jump').isVisible(), false);
 });
-test('pagination drains beyond 1000 messages before validating restored reply target', async t => {
+test('latest 50 load without draining history; scroll-up paginates older and preserves reply target', async t => {
   const history = Array.from({ length: 1001 }, (_, i) => ready(i + 1));
   const f = await setup(t, { state: { messages: history }, init: () => localStorage.setItem('wizard-manager:conversation:v1', JSON.stringify({ rev: 1, text: 'Reply to oldest page edge', target: { reply_to: 1001, source_id: 'thread/1001', source_message: 'response-1001', title: 'Research notes' } })) });
-  await f.frame.waitForFunction(() => document.querySelectorAll('#thread > li[data-message-id]').length === 1001);
+  await f.frame.waitForFunction(() => document.querySelectorAll('#thread > li[data-message-id]').length === 50);
   assert.equal(await f.frame.locator('#send').isEnabled(), true); assert.doesNotMatch(await f.frame.locator('#destination').textContent(), /Can’t reply/);
   assert.equal(await f.frame.locator('#announcer').textContent(), '', 'initial inventory must not replay announcements');
+  await f.frame.locator('#conversation').evaluate(n=>n.scrollTop=0);
+  await f.frame.waitForFunction(()=>document.querySelectorAll('#thread > li[data-message-id]').length>=100);
+  assert.equal(await f.frame.locator('#message').inputValue(),'Reply to oldest page edge');
 });
 test('portrait load failure shows named monogram; missing source retains full text and disables reply', async t => {
   const f = await setup(t, { state: { messages: [ready(1, 'Unavailable source', { source_id: null, source_available: false, text: 'Full retained summary. '.repeat(40) })] }, init: () => { document.addEventListener('DOMContentLoaded', () => { for (const img of document.querySelectorAll('img')) img.dispatchEvent(new Event('error')); }); } });
@@ -484,6 +494,41 @@ test('portrait load failure shows named monogram; missing source retains full te
   assert.ok(await f.frame.locator('span.mgr-face').count() > 0);
 });
 
+test('one transient failure retries quietly without a Try again prompt', async t=>{
+  let count=0,notice='';
+  const f=await setup(t,{route:async(route,req,url)=>{
+    if(url.pathname!=='/api/state')return false;
+    count++;
+    if(count===1){await route.abort('failed');return true;}
+    notice=await req.frame().evaluate(()=>document.getElementById('notice').textContent);
+    return false;
+  }});
+  assert.equal(count,2);assert.doesNotMatch(notice,/Try again/);assert.equal(f.posts.length,0);
+});
+test('cached project paints before a held delta request and keeps unsent draft', async t=>{
+  const projects=[{id:'alpha',name:'Alpha',running:0,unread:0,preview:''}];
+  const f=await setup(t,{state:{projects,messages:[ready(1,'Cached worker')]}});
+  await f.frame.locator('[data-project-id="alpha"]').click();
+  await f.frame.waitForSelector('[data-message-id="1"]');
+  await f.frame.locator('#message').fill('Keep my draft');
+  await f.frame.locator('#project-back').click();
+  let release,after;
+  f.custom(async(route,req,url)=>{
+    if(url.pathname!=='/api/state'||url.searchParams.get('project_id')!=='alpha')return false;
+    after=url.searchParams.get('after');await new Promise(resolve=>release=resolve);
+    await route.fulfill({json:{enabled:true,projects,messages:[],jobs:[],next_after:1,has_more:false}});return true;
+  });
+  const paint=await f.frame.evaluate(async()=>{
+    const start=performance.now();document.querySelector('[data-project-id="alpha"]').click();
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    return {ms:performance.now()-start,count:document.querySelectorAll('.mgr-summary').length};
+  });
+  assert.equal(paint.count,1);assert(paint.ms<300,JSON.stringify(paint));
+  assert.equal(await f.frame.locator('#message').inputValue(),'Keep my draft');
+  assert.equal(await f.frame.locator('#send').isEnabled(),false,'cached state cannot authorize sends');
+  await f.page.waitForTimeout(50);assert.equal(after,'1');release();
+  await f.frame.waitForFunction(()=>!document.getElementById('send').disabled);
+});
 test('initial outage is truthful; reconnect removes notice without sending retained text', async t => {
   let unavailable = true;
   const f = await setup(t, { route: async (route, req, url) => {
