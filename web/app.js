@@ -189,8 +189,9 @@
   function targetOf(m) { return { reply_to: m.id, source_id: m.source_id, source_message: m.source_message || null, title: m.title || 'Work thread' }; }
   function targetInvalid() {
     if (!draft.target) return false;
+    if (suppressSourceUpdates || suppressedSources.has(draft.target.source_id)) return true;
     const m = messages.get(draft.target.reply_to);
-    return loaded && (!m || !source(m) || m.source_id !== draft.target.source_id || (draft.target.source_message && m.source_message !== draft.target.source_message));
+    return loaded && ((!m && !draft.target.source_message) || (m && (!source(m) || m.source_id !== draft.target.source_id || (draft.target.source_message && m.source_message !== draft.target.source_message))));
   }
   // Context is a domain overlay, not a second worker conversation/composer.
   let contextLayer = null, contextMessage = null, contextGeneration = 0, contextOpener = null;
@@ -209,7 +210,7 @@
     contextGeneration++; contextMessage = null;
     if (contextDialog.open) contextDialog.close();
     contextLayer?.release(); contextLayer = null;
-    contextSummary.replaceChildren(); contextSummary.hidden = true;
+    contextSummary.ontoggle = null; contextSummary.replaceChildren(); contextSummary.hidden = true;
     contextReport.replaceChildren(); contextActions.replaceChildren();
     contextTitle.textContent = 'Worker context'; contextState.textContent = '';
     contextOpener?.focus(); contextOpener = null;
@@ -247,6 +248,25 @@
     const reply = action('Reply in this project', () => { const target = targetOf(m); closeContext(); chooseTarget(target); });
     const full = link(m, 'Open full thread'); full.onclick = () => closeContext();
     contextActions.replaceChildren(reply, full);
+    if (m.kind === 'ready') {
+      contextSummary.hidden = false; contextSummary.replaceChildren(element('summary', '', 'Earlier project updates'));
+      const history = element('div', 'mgr-history'); contextSummary.append(history);
+      let before = 0, busy = false, fetched = false;
+      const loadHistory = async () => {
+        if (busy) return; busy = true;
+        try {
+          const result = await api('api/update-history?project_id=' + encodeURIComponent(activeProject || 'unsorted') + '&message_id=' + m.id + '&before=' + before);
+          if (generation !== contextGeneration || !contextDialog.open) return;
+          history.querySelector('button')?.remove();
+          for (const old of result.history) { const item = element('div', 'mgr-history-item'); item.append(element('p', 'mgr-text', old.text), time(old.created)); history.append(item); }
+          if (!result.history.length && !fetched) history.append(element('p', '', 'No earlier updates.'));
+          before = result.before; fetched = true;
+          if (result.has_more) history.append(action('Older updates', loadHistory));
+        } catch (_) { history.replaceChildren(action('Retry earlier updates', loadHistory)); }
+        finally { busy = false; }
+      };
+      contextSummary.ontoggle = () => { if (contextSummary.open && !fetched) void loadHistory(); };
+    }
     contextDialog.showModal(); contextLayer = core?.back.push(() => { closeContext(); return true; }); contextClose.focus();
     // The panel is already painted before the scoped read starts. No transcript
     // cache: switching project/closing/rehiding invalidates late responses.
@@ -455,6 +475,15 @@
     for (const m of data.messages) {
       if (!Number.isSafeInteger(m.id) || m.id <= 0 || !['user', 'assistant'].includes(m.role) || typeof m.text !== 'string') throw new Error('Invalid message');
       if (m.role !== 'user' && sourceBlocked(m.source_id)) continue;
+      if (m.kind === 'ready' && m.source_id) {
+        const revisions = [...messages.values()].filter(old => old.kind === 'ready' && old.source_id === m.source_id && old.id !== m.id);
+        if (revisions.some(old => old.id > m.id)) continue;
+        for (const old of revisions) {
+          messages.delete(old.id); nodes.get(old.id)?.remove(); nodes.delete(old.id); richText.delete(old.id); dwell.delete(old.id);
+          if (read.divider === old.id) { read.divider = null; divider.remove(); }
+          // Keep a composed reply pinned to its exact original revision.
+        }
+      }
       if (!messages.has(m.id)) { messages.set(m.id, m); newMessages.push(m); }
       cursor = Math.max(cursor, m.id);
     }
