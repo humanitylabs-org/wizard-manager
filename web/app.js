@@ -237,7 +237,7 @@
       const result = await api('api/worker-context?project_id=' + encodeURIComponent(activeProject || 'unsorted') + '&message_id=' + m.id);
       if (generation !== contextGeneration || !contextDialog.open) return;
       if (result.source_id !== m.source_id || typeof result.text !== 'string') throw new Error('Wrong worker');
-      contextTitle.textContent = result.title || m.title; contextState.textContent = result.state || stateLabel(m);
+      contextTitle.textContent = result.title || m.title; contextState.textContent = result.state ? stateLabel({attention:{state:result.state}}) : stateLabel(m);
       if (!window.WosChat?.md) throw new Error('Markdown unavailable');
       const template = document.createElement('template'); template.innerHTML = window.WosChat.md(result.text);
       // Source text never starts remote media loads or runs worker actions.
