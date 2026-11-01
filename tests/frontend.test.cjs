@@ -692,7 +692,7 @@ for (const viewport of [{width:390,height:844},{width:1280,height:900}]) test(`p
   assert.equal(f.posts.length, 0, 'navigation and drafts never send a message');
 });
 
-test('Ready paraphrases render once; embedded asks, empty asks and unavailable sources retain meaning', async t => {
+test('Ready summaries stay intact; embedded, empty and unavailable-source asks remain inert', async t => {
   const ask = 'Open Connected accounts, then reply works <img src=x onerror=alert(1)>.';
   const embedded = 'The screen is ready. Reply GO when you have checked it.';
   const f = await setup(t, {state:{messages:[
@@ -702,7 +702,9 @@ test('Ready paraphrases render once; embedded asks, empty asks and unavailable s
     ready(4, 'Unavailable', {text:'Old card summary.',source_available:false,attention:{state:'needs_approval',ask:'May I publish this draft?'}}),
     ready(5, 'No ask', {text:'Full summary stays.',attention:{ask:'   '}})
   ]}});
-  assert.deepEqual(await f.frame.locator('.mgr-summary').allTextContents(), [ask,embedded,'The check passed.','May I publish this draft?','Full summary stays.']);
+  assert.deepEqual(await f.frame.locator('.mgr-summary').allTextContents(), ['The app is built and only your connection test remains.',embedded,'The check passed.','Old card summary.','Full summary stays.']);
+  assert.equal(await f.frame.locator('[data-ready-id="1"] .mgr-chip-state').textContent(), 'needs you · '+ask);
+  assert.equal(await f.frame.locator('[data-ready-id="4"] .mgr-chip-state').textContent(), 'needs you · May I publish this draft?');
   assert.equal(await f.frame.locator('#thread .mgr-text').count(),5);
   assert.equal(await f.frame.locator('#thread img:not(.mgr-face),#thread .mgr-summary a').count(),0);
   assert.equal(await f.frame.getByRole('button',{name:'Approve everything'}).count(),0);
