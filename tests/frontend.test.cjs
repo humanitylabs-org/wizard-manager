@@ -250,7 +250,7 @@ test('worker chips paint a scoped Markdown overlay before a delayed read; Back a
     assert.equal(url.searchParams.get('message_id'),'1');
     assert.equal(url.searchParams.get('project_id'),'unsorted');
     await gate;
-    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({source_id:'thread/1',title:'Overlay worker',state:'done',text:'## Full report\n\n**Verified fixture**\n\n- One\n- Two\n\n<script>alert(1)</script>\n![remote](https://example.invalid/track.png)'})});return true;
+    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({source_id:'thread/1',title:'Overlay worker',state:'needs_input',text:'## Full report\n\n**Verified fixture**\n\n- One\n- Two\n\n<script>alert(1)</script>\n![remote](https://example.invalid/track.png)'})});return true;
   }});
   const url=f.page.url();
   await f.frame.locator('.mgr-context-chip').click();
@@ -259,6 +259,7 @@ test('worker chips paint a scoped Markdown overlay before a delayed read; Back a
   await f.page.waitForTimeout(5000);
   assert.equal(await f.frame.locator('#worker-context').evaluate(n=>n.open),true);
   release(); await f.frame.locator('.mgr-context-report h2').waitFor();
+  assert.equal(await f.frame.locator('.mgr-context-state').textContent(),'needs you');
   assert.equal(await f.frame.locator('.mgr-context-report strong').textContent(),'Verified fixture');
   assert.equal(await f.frame.locator('.mgr-context-report li').count(),2);
   assert.equal(await f.frame.locator('.mgr-context-report img,.mgr-context-report script').count(),0);
