@@ -475,15 +475,46 @@ test('all five appearance fixtures preserve draft, target, message identity, sel
   assert.match(await f.frame.locator('#announcer').textContent(), /Update: New result/);
   await f.frame.locator('#jump').click(); assert.equal(await f.frame.locator('#jump').isVisible(), false);
 });
-test('latest 50 load without draining history; scroll-up paginates older and preserves reply target', async t => {
+for (const viewport of [{width:390,height:844},{width:1280,height:900}]) test(`latest 50 load without draining history; scroll-up paginates older and preserves reply target ${viewport.width}`, async t => {
   const history = Array.from({ length: 1001 }, (_, i) => ready(i + 1));
-  const f = await setup(t, { state: { messages: history }, init: () => localStorage.setItem('wizard-manager:conversation:v1', JSON.stringify({ rev: 1, text: 'Reply to oldest page edge', target: { reply_to: 1001, source_id: 'thread/1001', source_message: 'response-1001', title: 'Research notes' } })) });
+  const projects = [{id:'alpha',name:'Alpha',running:0,unread:0,preview:''}], requests = [];
+  const f = await setup(t, { viewport, state: { projects, messages: history }, route: async (route, req, url) => {
+    if (url.pathname === '/api/state' && url.searchParams.get('project_id') === 'alpha') requests.push(Object.fromEntries(url.searchParams));
+    return false;
+  }, init: () => localStorage.setItem('wizard-manager:project:alpha:v1', JSON.stringify({ rev: 1, text: 'Reply to oldest page edge', target: { reply_to: 1001, source_id: 'thread/1001', source_message: 'response-1001', title: 'Research notes' } })) });
+  // Pagination is project-scoped; the legacy global fixture never selects one
+  // and deliberately fails loadOlder's activeProject guard.
+  await f.frame.locator('[data-project-id="alpha"]').click();
   await f.frame.waitForFunction(() => document.querySelectorAll('#thread > li[data-message-id]').length === 50);
-  assert.equal(await f.frame.locator('#send').isEnabled(), true); assert.doesNotMatch(await f.frame.locator('#destination').textContent(), /Can’t reply/);
+  await f.frame.waitForFunction(() => !document.getElementById('send').disabled);
+  assert.doesNotMatch(await f.frame.locator('#destination').textContent(), /Can’t reply/);
   assert.equal(await f.frame.locator('#announcer').textContent(), '', 'initial inventory must not replay announcements');
-  await f.frame.locator('#conversation').evaluate(n=>n.scrollTop=0);
-  await f.frame.waitForFunction(()=>document.querySelectorAll('#thread > li[data-message-id]').length>=100);
+  assert.equal(await f.frame.locator('#thread > li[data-message-id]').first().getAttribute('data-message-id'), '952');
+  assert.equal(requests.filter(r => !('after' in r) && !('before' in r)).length, 1, 'one latest-window request');
+  assert.equal(requests.filter(r => 'before' in r).length, 0, 'opening must not drain history');
+  // A restored unread boundary can already be at zero. Establish a real
+  // scroll transition rather than assigning the current scrollTop again.
+  await f.frame.locator('#conversation').evaluate(n => n.scrollTop = n.scrollHeight);
+  await f.frame.waitForFunction(() => document.getElementById('conversation').scrollTop > 80);
+  const anchor = await f.frame.evaluate(() => {
+    const s = document.getElementById('conversation');
+    s.scrollTop = 0;
+    const node = document.querySelector('#thread > li[data-message-id]');
+    window.pageEdgeNode = node;
+    return {id:node.dataset.messageId,offset:node.getBoundingClientRect().top-s.getBoundingClientRect().top};
+  });
+  await f.frame.waitForFunction(() => document.querySelectorAll('#thread > li[data-message-id]').length === 100);
+  assert.deepEqual(requests.filter(r => 'before' in r).map(r => [r.project_id,r.before,r.limit]), [['alpha','952','50']]);
+  assert.equal(await f.frame.locator('#thread > li[data-message-id]').first().getAttribute('data-message-id'), '902');
+  const restored = await f.frame.evaluate(id => {
+    const node = document.querySelector(`[data-message-id="${id}"]`);
+    return {same:node===window.pageEdgeNode,offset:node.getBoundingClientRect().top-document.getElementById('conversation').getBoundingClientRect().top};
+  }, anchor.id);
+  assert(restored.same, 'existing message nodes retain identity');
+  assert(Math.abs(restored.offset-anchor.offset)<3, 'prepending keeps the reading anchor in place');
   assert.equal(await f.frame.locator('#message').inputValue(),'Reply to oldest page edge');
+  assert.equal(await f.frame.evaluate(() => JSON.parse(localStorage.getItem('wizard-manager:project:alpha:v1')).target.reply_to), 1001);
+  assert.equal(f.posts.filter(p => p.path === '/api/messages').length, 0);
 });
 test('portrait load failure shows named monogram; missing source retains full text and disables reply', async t => {
   const f = await setup(t, { state: { messages: [ready(1, 'Unavailable source', { source_id: null, source_available: false, text: 'Full retained summary. '.repeat(40) })] }, init: () => { document.addEventListener('DOMContentLoaded', () => { for (const img of document.querySelectorAll('img')) img.dispatchEvent(new Event('error')); }); } });
