@@ -209,10 +209,7 @@
     contextOpener?.focus(); contextOpener = null;
   }
   contextDialog.addEventListener('cancel', event => { event.preventDefault(); closeContext(); });
-  let outsideContext = false;
-  const outside = event => { const r = contextDialog.getBoundingClientRect(); return event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom; };
-  contextDialog.addEventListener('pointerdown', event => { outsideContext = event.target === contextDialog && outside(event); });
-  contextDialog.addEventListener('click', event => { if (outsideContext && event.target === contextDialog && outside(event)) closeContext(); outsideContext = false; });
+  // WizardApp owns outside-tap admission for native dialogs and dispatches cancel.
   function stateLabel(m) {
     return ({done:'done', needs_you:'needs you', needs_approval:'needs you', needs_input:'needs you', check:'your call', fyi:'update'})[attention(m).state] || attention(m).state || (m.kind === 'delegation' ? (/^→ continuing/.test(m.text) ? 'continuing' : 'new thread') : 'update');
   }

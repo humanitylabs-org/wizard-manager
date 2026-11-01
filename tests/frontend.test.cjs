@@ -266,7 +266,7 @@ test('worker chips paint a scoped Markdown overlay before a delayed read; Back a
   await f.page.locator('#back').click();
   assert.equal(await f.frame.locator('#worker-context').evaluate(n=>n.open),false);
   await f.frame.locator('.mgr-context-chip').click();
-  await f.frame.locator('#worker-context').evaluate(n=>{for(const type of ['pointerdown','click'])n.dispatchEvent(new MouseEvent(type,{clientX:0,clientY:0,bubbles:true}));});
+  await f.frame.locator('body').click({position:{x:4,y:4},force:true});
   assert.equal(await f.frame.locator('#worker-context').evaluate(n=>n.open),false);
   assert.equal(f.page.url(),url);
 });
