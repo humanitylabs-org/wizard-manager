@@ -51,6 +51,22 @@ class ReadySourceTests(unittest.TestCase):
             return c.execute('INSERT INTO messages (' + ','.join(values) + ') VALUES (' +
                              ','.join('?' for _ in values) + ')', tuple(values.values())).lastrowid
 
+    def test_latest_response_exact_source_final_markdown_and_hidden_recheck(self):
+        self.row(content='Old result')
+        latest = self.row(content=tagged('## Full report\n\n**Verified** result.'))
+        self.row(content='tool payload', tool_calls='[{"name":"tool"}]')
+        self.row(content='analysis payload', display_kind='analysis')
+        self.row(role='user', content='private input')
+        self.session('sibling'); self.row(session_id='sibling', content='other source')
+        result = self.source.latest_response('wizard_fixture')
+        self.assertEqual(result['source_message'], str(latest))
+        self.assertEqual(result['text'], '## Full report\n\n**Verified** result.')
+        self.assertEqual(result['attention']['state'], 'done')
+        with closing(sqlite3.connect(self.path)) as c, c:
+            c.execute("UPDATE sessions SET hidden=1 WHERE id='wizard_fixture'")
+        self.assertIsNone(self.source.latest_response('wizard_fixture'))
+        self.assertIsNone(self.source.latest_response('missing'))
+
     def test_visible_final_requires_its_own_valid_marker(self):
         self.row(content='Historical helper handoff, all done.', finish_reason='stop')
         self.row(content='[WIZARD_STATUS_V1]{bad json}[/WIZARD_STATUS_V1]')

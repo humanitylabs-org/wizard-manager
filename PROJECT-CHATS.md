@@ -3,12 +3,15 @@
 Owner-approved conversion of the existing Manager app in place. App id, data,
 service and gateway route remain `wizard-manager`; display name is Project Chats.
 The existing custom coordinator surface is explicitly retained by this brief;
-worker conversations use the real hosted Chats thread via WizardApp.nav.openThread.
+worker context now opens inside this conversation. All replies stay in the project
+chat and use its existing durable relay. A quiet full-thread link uses the real
+hosted Chats thread via WizardApp.nav.openThread for optional inspection.
 No Hermes, WAS or shell code changes.
 
 ## Shared components
 
-- REUSE: WizardApp shared client, nav.openThread, Back, theme, voice admission,
+- REUSE: WizardApp shared client, WosChat Markdown kit, nav.openThread, native
+  dialog top layer, Back, theme, voice admission,
   draft/update holds; existing Manager durable admission, relay, summary/dedupe,
   hidden-source suppression and native worker links.
 - EXTEND: Manager SQLite rows with project_id; Space read-only preference adapter;
