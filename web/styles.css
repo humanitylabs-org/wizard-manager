@@ -49,7 +49,7 @@ html.wz-hosted .mgr-head, html[data-wz-hosted] .mgr-head { display:none; }
 .mgr-options::backdrop { background:var(--wz-overlay,var(--fill-2)); backdrop-filter:blur(8px); }
 .mgr-modal-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .mgr-modal-head h2 { font-size:18px; font-weight:600; margin:0; }
-.mgr-modal-head button { display:grid; place-items:center; min-width:44px; min-height:44px; padding:0; border:0; border-radius:var(--wz-radius-pill,var(--r-pill)); background:none; box-shadow:none; font-size:24px; color:var(--wz-text-secondary,var(--ink-2)); }
+.mgr-modal-head button { display:grid; place-items:center; min-width:44px; min-height:44px; padding:0; border:0; border-radius:var(--wz-radius-pill,var(--r-pill)); background:none; box-shadow:none; font-size:1.5rem; color:var(--wz-text-secondary,var(--ink-2)); }
 .mgr-modal-head button:focus:not(:focus-visible) { outline:none; }
 .mgr-modal-head button:focus-visible { outline:2px solid var(--wz-accent,var(--accent)); outline-offset:2px; }
 .mgr-options p { color:var(--ink-2); line-height:1.5; margin:8px 0 18px; }
