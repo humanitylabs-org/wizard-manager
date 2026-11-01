@@ -1,7 +1,7 @@
 ---
 name: wizard-manager
 description: Use when operating Project Chats, one conversation per Wizard Space.
-version: 0.1.0
+version: 0.3.0
 author: Humanity Labs
 license: MIT
 ---

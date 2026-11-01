@@ -11,7 +11,7 @@
   ],
   "description": "One conversation per Wizard Space, with quick answers, explicit worker routing and short linked updates. Configure the single model route and WAS before activation.",
   "tipi_version": 1,
-  "version": "0.1.0",
+  "version": "0.3.0",
   "source": "https://github.com/humanitylabs-org/wizard-manager",
   "exposable": false,
   "supported_architectures": [

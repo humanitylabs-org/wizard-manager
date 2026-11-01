@@ -627,7 +627,7 @@
       },
     });
     core.back.register({ canGoBack: () => !!draft.target || !!activeProject, back: () => { if (draft.target) { clearTarget(); return true; } if (activeProject) { selectProject(null); return true; } return false; } });
-    core.ready({ name: 'wizard-manager', version: '0.2.0' }).then(() => {
+    core.ready({ name: 'wizard-manager', version: '0.3.0' }).then(() => {
       document.documentElement.classList.toggle('wz-hosted', core.hosted);
       if (!saved) hold ||= core.update.hold('unsaved Manager draft');
       viewport();

@@ -4,7 +4,7 @@ id: wizard-manager
 name: Project Chats
 type: service
 category: app
-version: 0.1.0
+version: 0.3.0
 summary: One project conversation per Wizard Space, with linked workers and short unread updates.
 license: MIT
 source: https://github.com/humanitylabs-org/wizard-manager

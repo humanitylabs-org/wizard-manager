@@ -30,7 +30,7 @@ def rpc(msg):
         return None
     method, params = msg.get('method'), msg.get('params') or {}
     if method == 'initialize':
-        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': APP_ID, 'version': '0.1.0'}}
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': APP_ID, 'version': '0.3.0'}}
     elif method == 'tools/list':
         result = {'tools': TOOLS}
     elif method == 'ping':
@@ -80,7 +80,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         try:
             if path == '/healthz':
-                return self.send(200, {'ok': True, 'app': APP_ID, 'version': '0.1.0', 'enabled': manager.enabled()})
+                return self.send(200, {'ok': True, 'app': APP_ID, 'version': '0.3.0', 'enabled': manager.enabled()})
             if path == '/api/state':
                 after = max(0, int(parse_qs(urlsplit(self.path).query).get('after', ['0'])[0]))
                 project_id = parse_qs(urlsplit(self.path).query).get('project_id', ['unsorted'])[0]

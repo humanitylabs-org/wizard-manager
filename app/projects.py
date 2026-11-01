@@ -22,6 +22,7 @@ class ProjectManager(Manager):
                                Path.home() / '.wizard-os' / 'ui-preferences.json')
         self.prefs_url = os.environ.get('MANAGER_PREFS_URL') or self.was.split('/wizard/hermes')[0] + '/wizard/v1/ui-preferences'
         self.spaces_error = ''
+        self.prefs_stamp = None
         with self.connect() as c:
             c.executescript('''
               CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,read_id INTEGER NOT NULL DEFAULT 0,last_worker TEXT);
@@ -34,6 +35,11 @@ class ProjectManager(Manager):
 
     def sync_projects(self):
         try:
+            stamp = None
+            if self.prefs_path.is_file():
+                stat = self.prefs_path.stat(); stamp = (stat.st_mtime_ns, stat.st_size)
+                if stamp == self.prefs_stamp:
+                    return
             # Read the server's owner preferences, never a browser-local replica.
             prefs = json.loads(self.prefs_path.read_text()) if self.prefs_path.is_file() else self.request(self.prefs_url, timeout=4)
             spaces = prefs.get('spaces', [])
@@ -55,6 +61,7 @@ class ProjectManager(Manager):
                     for sid in s.get('threads', []):
                         c.execute('DELETE FROM project_members WHERE session_id=? AND project_id!=? AND owned=1', (sid, s['id']))
             self.spaces_error = ''
+            self.prefs_stamp = stamp
         except Exception:
             self.spaces_error = 'Spaces could not be refreshed. Keeping the last saved project list.'
 
@@ -107,6 +114,7 @@ class ProjectManager(Manager):
                 for s in self.cache if s['id'] in ids and s['id'] not in blocked and visible(s)]
 
     def project_list(self):
+        self.sync_projects()
         with self.connect() as c:
             projects = [dict(r) for r in c.execute("SELECT * FROM projects WHERE active=1 ORDER BY id='unsorted',rowid")]
             sources = {r[0] for r in c.execute("SELECT DISTINCT source_id FROM messages WHERE source_id IS NOT NULL AND role='assistant'")}
