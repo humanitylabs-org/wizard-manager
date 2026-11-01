@@ -104,6 +104,8 @@ class FakeAPI:
 
 class ManagerTests(unittest.TestCase):
     def setUp(self):
+        from model_fixture import install_model_fixture
+        install_model_fixture(self)
         # Never resolve an inherited live canonical store, even in opt-out tests.
         env = patch.dict('os.environ', {'MANAGER_READY_DB': ''})
         env.start()

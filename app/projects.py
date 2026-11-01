@@ -140,7 +140,7 @@ class ProjectManager(Manager):
             jobs = [dict(r) for r in c.execute("SELECT id,status,error,session_id,run_id,created FROM jobs WHERE project_id=? AND status!='done' ORDER BY created", (project_id,))]
             pending = c.execute("SELECT count(*) FROM events WHERE project_id=? AND status!='done'", (project_id,)).fetchone()[0]
         blocked = self.blocked_sources(sources)
-        return {'enabled': self.enabled(), 'model': MODEL, 'project_id': project_id,
+        return {'enabled': self.enabled(), **self.model_state(), 'project_id': project_id,
                 'projects': self.project_list(), 'messages': [r for r in rows if r['role'] == 'user' or r['source_id'] not in blocked],
                 'jobs': jobs, 'threads': [t for t in self.thread_inventory() if t['id'] in self.members(project_id)],
                 'worker_index': self.project_index(project_id), 'suppressed_sources': sorted(blocked),

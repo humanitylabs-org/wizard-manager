@@ -20,6 +20,8 @@ class ScopedReady(FakeReadySource):
 
 class ProjectTests(unittest.TestCase):
     def setUp(self):
+        from model_fixture import install_model_fixture
+        install_model_fixture(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)

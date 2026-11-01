@@ -19,6 +19,8 @@ def tagged(body='Fixture completed.', state='done', ask='Fixture completed', **e
 
 class ReadySourceTests(unittest.TestCase):
     def setUp(self):
+        from model_fixture import install_model_fixture
+        install_model_fixture(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / 'canonical.sqlite3'
