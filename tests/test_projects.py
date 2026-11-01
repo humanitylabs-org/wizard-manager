@@ -146,6 +146,41 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(len(ids), 44)
         self.assertEqual(len(set(ids)), 44)
 
+    def test_latest_window_pagination_and_forward_deltas_are_bounded(self):
+        with self.m.connect() as c:
+            for i in range(135):
+                c.execute("INSERT INTO messages(role,text,created,kind,project_id) VALUES ('user',?,?,'chat','alpha')", ('Conversation '+str(i),i))
+        initial = self.m.state(project_id='alpha')
+        self.assertEqual(len(initial['messages']),50)
+        self.assertTrue(initial['has_older']); self.assertFalse(initial['has_more'])
+        self.assertEqual(initial['messages'][0]['text'],'Conversation 85')
+        collected = [r['id'] for r in initial['messages']]
+        page = initial
+        while page['has_older']:
+            page = self.m.state(project_id='alpha',before=page['next_before'])
+            collected += [r['id'] for r in page['messages']]
+        self.assertEqual(len(collected),135);self.assertEqual(len(set(collected)),135)
+        self.assertEqual(self.m.state(initial['next_after'],'alpha')['messages'],[])
+        with self.m.connect() as c:
+            c.execute("INSERT INTO messages(role,text,created,kind,project_id) VALUES ('user','newest',999,'chat','alpha')")
+        delta = self.m.state(initial['next_after'],'alpha')
+        self.assertEqual([r['text'] for r in delta['messages']],['newest'])
+        self.assertNotIn('threads',initial);self.assertNotIn('worker_index',initial);self.assertNotIn('model_last_call',initial)
+        self.assertNotIn('suppressed_sources',self.m.state(project_id='alpha',visibility_revision=initial['visibility_revision']))
+
+    def test_state_budget_and_metadata_revision_never_wait_for_was(self):
+        with self.m.connect() as c:
+            for i in range(70):
+                c.execute("INSERT INTO messages(role,text,created,kind,project_id) VALUES ('user',?,?,'chat','alpha')", ('Large text. '*170,i))
+        self.m.cache_at = 0;self.api.was_fail=True;self.api.calls.clear()
+        initial=self.m.state(project_id='alpha')
+        self.assertLess(len(json.dumps(initial).encode()),30000)
+        self.assertTrue(initial['has_older'])
+        metadata=self.m.metadata('alpha')
+        unchanged=self.m.metadata('alpha',metadata['revision'])
+        self.assertTrue(unchanged['unchanged']);self.assertNotIn('threads',unchanged)
+        self.assertEqual(self.api.calls,[])
+
     def test_ready_dedupes_after_restart(self):
         self.ready.add(sid='work_alpha')
         self.m.scan(); self.m.summarize()

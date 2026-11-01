@@ -27,6 +27,8 @@ class ProjectManager(Manager):
         self.prefs_url = os.environ.get('MANAGER_PREFS_URL') or self.was.split('/wizard/hermes')[0] + '/wizard/v1/ui-preferences'
         self.spaces_error = ''
         self.prefs_stamp = None
+        self.project_sync_at = 0
+        self.metadata_cache = {}
         with self.connect() as c:
             c.executescript('''
               CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,read_id INTEGER NOT NULL DEFAULT 0,last_worker TEXT);
@@ -38,7 +40,11 @@ class ProjectManager(Manager):
             c.execute("INSERT OR IGNORE INTO projects(id,name) VALUES ('unsorted','Unsorted')")
         self.sync_projects()
 
-    def sync_projects(self):
+    def sync_projects(self, cached=False):
+        # The watcher owns remote refresh; state never waits for WAS.
+        if cached and (time.monotonic() - self.project_sync_at < 3 or not self.prefs_path.is_file()):
+            return
+        self.project_sync_at = time.monotonic()
         try:
             stamp = None
             if self.prefs_path.is_file():
@@ -107,49 +113,120 @@ class ProjectManager(Manager):
         ids = {sid for sid in allowed if self.project_for_session(sid) is not None}
         return self.ready_source.read(cursor, allowed=ids)
 
+    def display_blocked(self, ids):
+        # Display-only short TTL. Action/model authorization always uses the
+        # uncached blocked_sources check. A canonical file/WAL write invalidates
+        # immediately, so hiding a source is not delayed by the TTL.
+        ids = set(ids)
+        path = getattr(self.ready_source, 'path', None)
+        if path is None:
+            return self.blocked_sources(ids)
+        try:
+            signature = tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.exists() else None
+                              for p in (path, Path(str(path) + '-wal')))
+        except OSError:
+            return ids
+        key = (tuple(sorted(ids)), signature, int(time.monotonic()))
+        cached = getattr(self, '_display_blocked_cache', None)
+        if not cached or cached[0] != key:
+            cached = (key, self.blocked_sources(ids))
+            self._display_blocked_cache = cached
+        return cached[1]
+
     def project_index(self, pid):
         ids = self.members(pid)
         if not self.cache_at or time.time() - self.cache_at >= 45:
             return []
-        blocked = self.blocked_sources(ids)
+        blocked = self.display_blocked(ids)
         return [{'id': s['id'], 'title': s.get('title') or 'Untitled thread',
                  'state': ((s.get('wizard_attention') or {}).get('ask') or s.get('status') or s.get('wizard_last_run_status') or 'idle')[:160],
                  'status': s.get('status') or s.get('wizard_last_run_status') or 'idle',
                  'updated': s.get('wizard_activity_at') or s.get('updated_at'), 'url': thread_link(s['id'])}
                 for s in self.cache if s['id'] in ids and s['id'] not in blocked and visible(s)]
 
-    def project_list(self):
-        self.sync_projects()
+    def project_list(self, cached=False):
+        self.sync_projects(cached=cached)
         with self.connect() as c:
             projects = [dict(r) for r in c.execute("SELECT * FROM projects WHERE active=1 ORDER BY id='unsorted',rowid")]
+            memberships = {}
+            for r in c.execute('SELECT project_id,session_id FROM project_members'):
+                memberships.setdefault(r['project_id'], set()).add(r['session_id'])
             sources = {r[0] for r in c.execute("SELECT DISTINCT source_id FROM messages WHERE source_id IS NOT NULL AND role='assistant'")}
-            blocked = self.blocked_sources(sources)
+            blocked = self.display_blocked(sources | set().union(set(), *memberships.values()))
+            visible_sql = " AND (role='user' OR source_id IS NULL OR source_id NOT IN (" + ','.join('?' for _ in blocked) + '))' if blocked else ''
+            blocked_params = sorted(blocked)
+            inventory = [s for s in self.cache if s['id'] not in blocked and visible(s)] if self.cache_at and time.time()-self.cache_at<45 else []
             for p in projects:
-                rows = [dict(r) for r in c.execute("SELECT m.id,m.text,m.created,m.kind,m.source_id,m.role FROM messages m WHERE m.project_id=? AND " + CURRENT + " ORDER BY m.id DESC", (p['id'],))
-                        if r['role'] == 'user' or r['source_id'] not in blocked]
-                p['unread'] = len({r['source_id'] for r in rows if r['kind'] == 'ready' and r['id'] > p['read_id']})
-                p['preview'] = rows[0]['text'][:140] if rows else 'Send a request or catch up on this Space.'
-                p['updated'] = rows[0]['created'] if rows else None
-                index = self.project_index(p['id'])
-                p['running'] = sum(s['status'] in ACTIVE for s in index)
+                # The latest visible row is necessarily a current revision.
+                row = c.execute('SELECT text,created FROM messages WHERE project_id=?' + visible_sql + ' ORDER BY id DESC LIMIT 1', [p['id']] + blocked_params).fetchone()
+                # Any revision after the watermark implies its current revision
+                # is also after it. DISTINCT workers avoids scanning full prose.
+                p['unread'] = c.execute("SELECT count(DISTINCT source_id) FROM messages WHERE project_id=? AND kind='ready' AND id>?" + visible_sql, [p['id'],p['read_id']] + blocked_params).fetchone()[0]
+                p['preview'] = row['text'][:140] if row else 'Send a request or catch up on this Space.'
+                p['updated'] = row['created'] if row else None
+                index = [s for s in inventory if s['id'] in memberships.get(p['id'], set())]
+                p['running'] = sum((s.get('status') or s.get('wizard_last_run_status') or 'idle') in ACTIVE for s in index)
                 p['workers'] = len(index)
         return projects
 
-    def state(self, after=0, project_id='unsorted'):
+    def metadata(self, project_id='unsorted', revision=None):
+        import hashlib
         self.require_project(project_id)
-        # Query the chosen project before pagination: other conversations never
-        # leak through a global page, including while a model reply is pending.
+        # Local projection only; canonical content is never fetched here.
+        key = (self.cache_at, int(time.monotonic() / 2))
+        cached = self.metadata_cache.get(project_id)
+        if not cached or cached[0] != key:
+            ids = self.members(project_id)
+            value = {'threads': [t for t in self.thread_inventory() if t['id'] in ids],
+                     'worker_index': self.project_index(project_id), **self.model_state()}
+            digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:20]
+            cached = (key, digest, value)
+            self.metadata_cache[project_id] = cached
+        _, digest, value = cached
+        return {'revision': digest, 'unchanged': revision == digest, **({} if revision == digest else value)}
+
+    def state(self, after=None, project_id='unsorted', before=None, limit=50, visibility_revision=None):
+        self.sync_projects(cached=True)
+        self.require_project(project_id)
+        limit = max(1, min(50, int(limit)))
         with self.connect() as c:
-            rows = [dict(r) for r in c.execute('SELECT m.* FROM messages m WHERE m.project_id=? AND m.id>? AND ' + CURRENT + ' ORDER BY m.id LIMIT 1000', (project_id, after))]
             sources = {r[0] for r in c.execute("SELECT DISTINCT source_id FROM messages WHERE project_id=? AND role='assistant' AND source_id IS NOT NULL", (project_id,))}
-            jobs = [dict(r) for r in c.execute("SELECT id,status,error,session_id,run_id,created FROM jobs WHERE project_id=? AND status!='done' ORDER BY created", (project_id,))]
+            blocked = self.display_blocked(sources)
+            scope = 'm.project_id=? AND ' + CURRENT
+            params: list = [project_id]
+            if blocked:
+                scope += " AND (m.role='user' OR m.source_id IS NULL OR m.source_id NOT IN (" + ','.join('?' for _ in blocked) + '))'
+                params += sorted(blocked)
+            forward = after is not None and before is None
+            if before is not None:
+                scope += ' AND m.id<?'; params.append(int(before))
+            elif after is not None:
+                scope += ' AND m.id>?'; params.append(int(after))
+            order = 'ASC' if forward else 'DESC'
+            rows = [dict(r) for r in c.execute('SELECT m.* FROM messages m WHERE ' + scope + ' ORDER BY m.id ' + order + ' LIMIT ?', (*params, limit + 1))]
+            more = len(rows) > limit
+            rows = rows[:limit]
+            used, bounded = 0, []
+            for row in rows:
+                size = len(json.dumps(row).encode())
+                if bounded and used + size > 24000:
+                    more = True; break
+                bounded.append(row); used += size
+            rows = bounded if forward else list(reversed(bounded))
+            maximum = c.execute('SELECT coalesce(max(id),0) FROM messages WHERE project_id=?', (project_id,)).fetchone()[0]
+            jobs = [dict(r) for r in c.execute("SELECT id,status,error,session_id,run_id,created FROM jobs WHERE project_id=? AND status!='done' ORDER BY created LIMIT 50", (project_id,))]
             pending = c.execute("SELECT count(*) FROM events WHERE project_id=? AND status!='done'", (project_id,)).fetchone()[0]
-        blocked = self.blocked_sources(sources)
-        return {'enabled': self.enabled(), **self.model_state(), 'project_id': project_id,
-                'projects': self.project_list(), 'messages': [r for r in rows if r['role'] == 'user' or r['source_id'] not in blocked],
-                'jobs': jobs, 'threads': [t for t in self.thread_inventory() if t['id'] in self.members(project_id)],
-                'worker_index': self.project_index(project_id), 'suppressed_sources': sorted(blocked),
-                'next_after': rows[-1]['id'] if rows else after, 'has_more': len(rows) == 1000,
+        import hashlib
+        visibility = hashlib.sha256(json.dumps(sorted(blocked)).encode()).hexdigest()[:16]
+        model = self.model_state()
+        model.pop('model_last_call', None)
+        return {'enabled': self.enabled(), **model, 'project_id': project_id,
+                'projects': self.project_list(cached=True), 'messages': rows, 'jobs': jobs,
+                'visibility_revision': visibility,
+                **({} if visibility_revision == visibility else {'suppressed_sources': sorted(blocked)}),
+                'next_after': (rows[-1]['id'] if rows else int(after or 0)) if forward and more else maximum,
+                'has_more': more if forward else False,
+                'next_before': rows[0]['id'] if rows else before, 'has_older': more if not forward else None,
                 'monitor': {'last_scan': self.last_scan, 'error': self.spaces_error or self.error, 'pending': pending},
                 'model_calls': self.model_calls, 'version': '0.3.0'}
 
