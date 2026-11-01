@@ -70,8 +70,9 @@ html.wz-hosted .mgr-head, html[data-wz-hosted] .mgr-head { display:none; }
 .mgr-context-chip { display:flex; align-items:center; gap:8px; max-width:100%; min-height:32px; margin-top:9px; padding:5px 10px; border:1px solid var(--wz-border); border-radius:var(--wz-radius-pill,999px); background:var(--wz-surface); color:var(--wz-text-secondary); font-size:var(--wz-text-xs,0.75rem); text-align:left; }
 .mgr-context-chip:hover { border-color:var(--wz-accent); color:var(--wz-text); }
 .mgr-context-chip:active { transform:scale(.98); background:var(--wz-accent-soft); }
-.mgr-chip-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.mgr-chip-state { white-space:nowrap; padding-left:8px; border-left:1px solid var(--wz-border); }
+.mgr-chip-title { flex:0 1 auto; min-width:4em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mgr-chip-state { flex:0 1 auto; min-width:0; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-left:8px; border-left:1px solid var(--wz-border); }
+.mgr-chip-arrow { flex:none; }
 .mgr-chip-state.needs-you,.mgr-context-state.needs-you { color:var(--wz-accent,var(--accent)); font-weight:600; }
 .mgr-chip-arrow { margin-left:auto; }
 .mgr-context { width:min(620px,calc(100vw - 32px)); max-height:calc(100% - 40px); margin:auto; padding:20px; border:1px solid var(--wz-border); border-radius:var(--wz-radius-lg,18px); background:var(--wz-panel-raised,var(--wz-panel,var(--wz-base,var(--canvas)))); color:var(--wz-text); box-shadow:var(--wz-shadow); }
