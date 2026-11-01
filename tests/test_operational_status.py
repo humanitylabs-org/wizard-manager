@@ -13,6 +13,8 @@ QUESTION = "I'm curious, check our running threads. Are they all running or are 
 
 class OperationalTests(unittest.TestCase):
     def setUp(self):
+        from model_fixture import install_model_fixture
+        install_model_fixture(self)
         env = patch.dict('os.environ', {'MANAGER_READY_DB': ''})
         env.start(); self.addCleanup(env.stop)
         tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)

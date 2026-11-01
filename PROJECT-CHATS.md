@@ -44,11 +44,23 @@ answers or another project's history. Fetching/listing is not reading.
 
 ## Model
 
-`MANAGER_MODEL` is the single model selection (default deepseek-v4-1-flash),
-with `MANAGER_MODEL_URL` and the existing router credential supplied at runtime.
-Effective-model confirmation remains mandatory. No paid provider is added.
-Configured Sonnet availability and authorized app inference reachability must
-be tested separately; a subscription catalogue alone is not a working route.
+Replies, routing decisions and Ready summaries use one dedicated hidden Hermes
+session per call via `MANAGER_WAS_URL`. The route is the normal Chats Claude
+subscription route: `claude-sonnet-5[1m]`, provider
+`claude-subscription-directsdk-experimental`, with a required model lock and
+reasoning disabled for quick coordination. Creation is followed by PATCH hidden
+and exact-session hidden/model readback **before** any run is admitted. Completion
+revalidates the same session. These inference sessions are never project workers.
+
+Inference has a 60-second deadline, followed by at most a 2-second best-effort
+stop request on failure. There is **no DeepSeek fallback**: retain the user's
+message and expose a retryable error instead of silently changing models. The
+existing JSON plan validation and worker relay are unchanged. `/api/state`
+includes readable `model_in_use`, `model_configured`, `model_error`, and a durable
+`model_last_call` receipt containing the actual readback model, session, run and
+latency. Before the first successful call, model in use is `Not used yet`.
+Legacy `MANAGER_MODEL`, `MANAGER_MODEL_URL` and router credentials no longer
+select this app's model. No paid provider, Hermes, WAS, shell or web change.
 
 ## Verification
 

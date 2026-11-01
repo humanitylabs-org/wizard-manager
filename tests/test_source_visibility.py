@@ -14,6 +14,8 @@ from ready_source import ReadySource
 
 class SourceVisibilityTests(unittest.TestCase):
     def setUp(self):
+        from model_fixture import install_model_fixture
+        install_model_fixture(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)

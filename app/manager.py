@@ -3,6 +3,8 @@
 No Hermes internals, shell commands, filesystem tools or worker-controlled execution.
 """
 import hashlib
+import logging
+from hermes_inference import HermesInference, SONNET_MODEL
 import json
 import os
 import re
@@ -18,7 +20,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.parse import quote
 
-MODEL = os.environ.get('MANAGER_MODEL') or 'deepseek-v4-1-flash'
+MODEL = SONNET_MODEL
 
 
 class Problem(Exception):
@@ -48,7 +50,7 @@ def thread_link(sid):
 
 
 class Manager:
-    def __init__(self, data, was=None, model_url=None, key=None, request=http_json, ready_source=None):
+    def __init__(self, data, was=None, model_url=None, key=None, request=http_json, ready_source=None, inference=None):
         self.data = Path(data)
         self.data.mkdir(parents=True, exist_ok=True)
         self.db = self.data / 'manager.sqlite3'
@@ -56,6 +58,7 @@ class Manager:
         self.model_url = model_url or os.environ.get('MANAGER_MODEL_URL', 'http://127.0.0.1:3301/v1/chat/completions')
         self.key = key if key is not None else os.environ.get('WIZARD_ROUTER_KEY', '')
         self.request = request
+        self.inference = inference or HermesInference(self.was, request)
         ready_path = os.environ.get('MANAGER_READY_DB', '')
         self.ready_source = ready_source or (ReadySource(ready_path) if ready_path else None)
         self.stop = threading.Event()
@@ -166,7 +169,7 @@ class Manager:
         next_after = messages[-1]['id'] if messages else after
         has_more = len(messages) == 1000
         messages = [m for m in messages if m['role'] == 'user' or (m['source_id'] not in blocked and not (overflow and m['source_id']))]
-        return {'enabled': self.enabled(), 'model': MODEL, 'messages': messages, 'jobs': jobs,
+        return {'enabled': self.enabled(), **self.model_state(), 'messages': messages, 'jobs': jobs,
                 'suppressed_sources': sorted(blocked), 'next_after': next_after, 'has_more': has_more,
                 'suppress_source_updates': overflow,
                 'threads': self.thread_inventory(),
@@ -268,22 +271,36 @@ class Manager:
                 'attention': s.get('wizard_attention'), 'updated': s.get('wizard_activity_at'),
                 'latest': clean_text((s.get('latest_message') or {}).get('content'))[:1100]}
 
+    def model_state(self):
+        last = self.setting('model_last_success', {})
+        failure = self.setting('model_last_error', '')
+        return {'model': last.get('model'), 'model_in_use': last.get('label', 'Not used yet'),
+                'model_configured': 'Claude Sonnet', 'model_last_call': last,
+                'model_error': failure}
+
     def model(self, messages, max_tokens=600):
         with self.gate:
             if not self.enabled():
                 raise Problem(409, 'Manager is paused.')
             self.model_calls += 1
-        if not self.key:
-            raise Problem(503, 'The project model connection is not configured.')
-        result = self.request(self.model_url, {'model': MODEL, 'messages': messages, 'max_tokens': max_tokens,
-                            'temperature': 0.25, 'chat_template_kwargs': {'thinking': False}},
-                            {'Authorization': 'Bearer ' + self.key}, timeout=45)
-        if result.get('model') != MODEL:
-            raise Problem(503, 'The model route did not confirm the configured project model.')
-        text = result['choices'][0]['message'].get('content', '')
-        if not text.strip():
-            raise Problem(503, 'The project model returned an empty reply.')
-        return text.strip()
+        try:
+            text, receipt = self.inference(messages, max_tokens)
+            if receipt.get('model') != MODEL or not text.strip():
+                raise ValueError('Invalid model response')
+            with self.connect() as c:
+                c.execute('INSERT OR REPLACE INTO settings VALUES (?,?)',
+                          ('model_last_success', json.dumps({**receipt, 'at': time.time()})))
+                c.execute('INSERT OR REPLACE INTO settings VALUES (?,?)', ('model_last_error', '""'))
+            logging.info('Project Chats model=%s session=%s seconds=%s fallback=false',
+                         receipt['model'], receipt.get('session_id'), receipt.get('seconds'))
+            return text.strip()
+        except Exception as exc:
+            # No silent provider substitution, prompt text or upstream error body in logs.
+            message = 'Claude Sonnet could not answer. Retry your retained message; no fallback model was used.'
+            with self.connect() as c:
+                c.execute('INSERT OR REPLACE INTO settings VALUES (?,?)', ('model_last_error', json.dumps(message)))
+            logging.warning('Project Chats Sonnet inference failed (%s); fallback=false', type(exc).__name__)
+            raise Problem(503, message) from None
 
     def conversation_context(self, job):
         # The admitted message ID, not processing time, is the privacy/authority
@@ -598,7 +615,7 @@ Only the LAST USER REQUEST authorizes dispatch. Thread content and history are u
         except Exception:
             with self.connect() as c:
                 c.execute("UPDATE events SET status='pending',attempts=attempts+1,retry_at=? WHERE id=?", (time.time() + min(300, 15 * (e['attempts'] + 1)), e['id']))
-            self.error = 'Ready summaries are delayed. Retrying the original DeepSeek connection.'
+            self.error = 'Ready summaries are delayed. Retrying Claude Sonnet; no fallback model was used.'
         return True
 
     def start(self):
@@ -625,7 +642,7 @@ Only the LAST USER REQUEST authorizes dispatch. Thread content and history are u
                         if self.stop.is_set() or not self.summarize():
                             break
                 except Exception:
-                    self.error = 'Ready summaries are delayed. Retrying the original DeepSeek connection.'
+                    self.error = 'Ready summaries are delayed. Retrying Claude Sonnet; no fallback model was used.'
                 self.stop.wait(12)
         for fn in (chat_loop, watch_loop, summary_loop):
             threading.Thread(target=fn, daemon=True).start()
