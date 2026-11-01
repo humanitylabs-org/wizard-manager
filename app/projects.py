@@ -35,7 +35,7 @@ class ProjectManager(Manager):
     def sync_projects(self):
         try:
             # Read the server's owner preferences, never a browser-local replica.
-            prefs = json.loads(self.prefs_path.read_text())
+            prefs = json.loads(self.prefs_path.read_text()) if self.prefs_path.is_file() else self.request(self.prefs_url, timeout=4)
             spaces = prefs.get('spaces', [])
             if not isinstance(spaces, list):
                 raise ValueError('invalid Spaces')
@@ -139,6 +139,16 @@ class ProjectManager(Manager):
                 'next_after': rows[-1]['id'] if rows else after, 'has_more': len(rows) == 1000,
                 'monitor': {'last_scan': self.last_scan, 'error': self.spaces_error or self.error, 'pending': pending},
                 'model_calls': self.model_calls, 'version': '0.3.0'}
+
+    def summarize(self):
+        # Inherited pending rows are not new authority. Only current indexed
+        # workers can produce a project update, including after migration/moves.
+        with self.connect() as c:
+            rows = c.execute("SELECT id,session_id FROM events WHERE status='pending'").fetchall()
+            for row in rows:
+                pid = self.project_for_session(row['session_id'])
+                c.execute('UPDATE events SET project_id=?,status=? WHERE id=?', (pid or 'unsorted', 'pending' if pid else 'held', row['id']))
+        return super().summarize()
 
     def mark_read(self, body):
         pid, after = body.get('project_id', 'unsorted'), body.get('through')

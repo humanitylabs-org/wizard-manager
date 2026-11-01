@@ -542,3 +542,48 @@ test('orb receiver rechecks pinned authorization after state read and before POS
   assert.equal(error, 'frame detached');
   assert.equal(f.posts.length, 0);
 });
+
+for (const viewport of [{width:390,height:844},{width:1280,height:900}]) test(`project list, Back and draft isolation ${viewport.width}`, async t => {
+  const projects = [
+    {id:'alpha',name:'Alpha Space',unread:1,running:2,preview:'A real workflow will run separately.'},
+    {id:'beta',name:'Beta Space',unread:0,running:0,preview:'No updates.'},
+    {id:'unsorted',name:'Unsorted',unread:0,running:0,preview:'Requests without a Space.'}
+  ];
+  const f = await setup(t, {hosted:true,viewport,state:{projects}});
+  await f.frame.locator('[data-project-id="alpha"]').waitFor();
+  assert.equal(await f.frame.locator('#compose').isVisible(), false);
+  assert.equal(await f.frame.locator('.project-unread').textContent(), '1');
+  await f.frame.locator('[data-project-id="alpha"]').click();
+  await f.frame.locator('#message').fill('Alpha draft');
+  assert.equal(await f.frame.locator('#project-title').textContent(), 'Alpha Space');
+  await f.frame.locator('#project-back').click();
+  assert.equal(await f.frame.locator('#project-list').isVisible(), true);
+  await f.frame.locator('[data-project-id="beta"]').click();
+  assert.equal(await f.frame.locator('#message').inputValue(), '');
+  await f.frame.locator('#message').fill('Beta draft');
+  await f.page.locator('#back').click();
+  assert.equal(await f.frame.locator('#project-list').isVisible(), true);
+  await f.frame.locator('[data-project-id="alpha"]').click();
+  assert.equal(await f.frame.locator('#message').inputValue(), 'Alpha draft');
+  assert.equal(f.posts.length, 0, 'navigation and drafts never send a message');
+});
+
+test('project switch rejects delayed previous-project history and pins send project', async t => {
+  const projects = [{id:'alpha',name:'Alpha',running:0,unread:0,preview:''},{id:'beta',name:'Beta',running:0,unread:0,preview:''}];
+  let release, held = false;
+  const f = await setup(t, {hosted:true,state:{projects},route:async (route,req,url) => {
+    if (url.pathname !== '/api/state' || url.searchParams.get('project_id') !== 'alpha') return false;
+    held = true; await new Promise(resolve => release = resolve);
+    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({enabled:true,projects,messages:[answer(1,'fixture-alpha','ALPHA ONLY')],jobs:[]})});
+    return true;
+  }});
+  await f.frame.locator('[data-project-id="alpha"]').click();
+  await f.page.waitForTimeout(150); assert(held);
+  await f.frame.locator('#project-back').click();
+  await f.frame.locator('[data-project-id="beta"]').click();
+  release(); await f.page.waitForTimeout(300);
+  assert.equal(await f.frame.locator('#thread').textContent(), '');
+  await f.frame.locator('#message').fill('Beta request');
+  await f.frame.locator('#send').click(); await f.page.waitForTimeout(200);
+  assert.equal(f.posts.find(p => p.path === '/api/messages').body.project_id, 'beta');
+});
