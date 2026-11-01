@@ -17,7 +17,7 @@ compose = {'services': {'wizard-manager': {
     'environment': {'PORT': '8799', 'BIND': '0.0.0.0', 'DATA_DIR': '/data',
         'PYTHONDONTWRITEBYTECODE': '1',
         **{k: '${' + k + ':-}' for k in ['WIZARD_TRUSTED_HOSTS', 'WIZARD_TRUSTED_ORIGINS',
-            'MANAGER_WAS_URL', 'MANAGER_MODEL_URL', 'WIZARD_ROUTER_KEY', 'MANAGER_READY_DB']}},
+            'MANAGER_WAS_URL', 'MANAGER_MODEL_URL', 'MANAGER_MODEL', 'MANAGER_PREFS_PATH', 'MANAGER_PREFS_URL', 'WIZARD_ROUTER_KEY', 'MANAGER_READY_DB']}},
     'volumes': ['${APP_SOURCE_DIR}:/app:ro', '${APP_DATA_DIR}/data:/data'],
     'command': ['python', '/app/app/server.py'],
     'x-runtipi': {'is_main': True, 'internal_port': 8799}

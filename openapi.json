@@ -1,13 +1,13 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "Wizard Manager",
-    "version": "0.1.0"
+    "title": "Project Chats",
+    "version": "0.3.0"
   },
   "paths": {
     "/api/state": {
       "get": {
-        "summary": "Read persistent conversation, jobs and monitor state",
+        "summary": "Read one project conversation, jobs, worker index and project list",
         "description": "Supports after integer message cursor. messages are ascending and omit unavailable assistant source updates, never user-authored turns. next_after advances over raw retained rows (including suppressed rows); has_more governs paging. Every page includes suppressed_sources, the current canonical source-ID suppression snapshot. Clients must evict matching retained assistant cards and reply metadata even when messages is empty. suppress_source_updates fails closed if the bounded projection is exceeded. When a previously suppressed source becomes available, replay from after=0 with ID deduplication. job_id correlates sends; jobs excludes completed jobs. Polling is read-only and does not perform network visibility checks.",
         "responses": {
           "200": {
@@ -22,13 +22,31 @@
           "409": {
             "description": "Disabled state or conflicting request"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "unsorted"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ]
       }
     },
     "/api/messages": {
       "post": {
         "summary": "Admit an explicit owner message",
-        "description": "Body: text, request_id (stable unique string), optional reply_to (Manager message integer). 202 durable queue receipt; replay identical request safely.",
+        "description": "Body: text, project_id (Space id or unsorted), request_id (stable unique string), optional reply_to (message integer in this project). 202 durable queue receipt, not completion; replay the identical payload safely.",
         "responses": {
           "202": {
             "description": "Successful response"
@@ -121,6 +139,27 @@
           },
           "409": {
             "description": "Disabled state or conflicting request"
+          }
+        }
+      }
+    },
+    "/api/projects": {
+      "get": {
+        "summary": "List active seeded projects with unread update counts, running workers and last preview",
+        "responses": {
+          "200": {
+            "description": "Project list"
+          }
+        }
+      }
+    },
+    "/api/read": {
+      "post": {
+        "summary": "Advance a single project reading position",
+        "description": "Body: project_id, through (integer message id actually read). Clamped to current project history; never consumes future updates.",
+        "responses": {
+          "200": {
+            "description": "Readback project list"
           }
         }
       }

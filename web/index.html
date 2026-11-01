@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
-  <title>Archimedes · Manager</title>
+  <title>Project Chats</title>
   <script src="boot.js"></script>
   <link rel="stylesheet" href="wizard-ui.css">
   <link rel="stylesheet" href="styles.css">
@@ -14,7 +14,9 @@
 </head>
 <body>
   <main class="wz-app mgr">
-    <header class="wz-head mgr-head"><span id="header-portrait"></span><h1>Archimedes</h1></header>
+    <header class="wz-head mgr-head"><span id="header-portrait"></span><h1>Project Chats</h1></header>
+    <nav id="project-nav" hidden><button id="project-back" type="button" aria-label="Back to projects">‹ Projects</button><h2 id="project-title"></h2><span id="project-running"></span></nav>
+    <section id="project-list" class="wz-scroll" aria-label="Project chats" hidden></section>
     <div id="notice" class="mgr-notice" hidden></div>
     <section id="conversation" class="wz-scroll" aria-label="Conversation" tabindex="0">
       <div id="empty" class="wz-empty mgr-empty" hidden>
@@ -32,7 +34,7 @@
       <div id="send-state" class="mgr-sendstate" hidden></div>
       <div id="storage-state" class="mgr-sendstate mgr-error" hidden>Draft couldn’t be saved on this device. Keep this window open.</div>
       <div class="mgr-row">
-        <button id="options-open" class="mgr-opt" type="button" aria-label="Manager options" aria-haspopup="dialog">
+        <button id="options-open" class="mgr-opt" type="button" aria-label="Project Chats options" aria-haspopup="dialog">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7m4 0h5M4 17h3m4 0h9"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
         </button>
         <textarea id="message" class="wz-input" rows="1" maxlength="12000" aria-label="Message Archimedes" placeholder="Message Archimedes" enterkeyhint="enter" aria-describedby="send-state storage-state"></textarea>
@@ -43,10 +45,10 @@
     </form>
     <div id="announcer" class="wz-sr" aria-live="polite" aria-atomic="true"></div>
     <dialog id="options" class="mgr-options" aria-labelledby="options-title" aria-describedby="options-copy">
-      <div class="mgr-modal-head"><h2 id="options-title">Manager</h2><button id="options-close" type="button" aria-label="Close Manager options">×</button></div>
+      <div class="mgr-modal-head"><h2 id="options-title">Project Chats</h2><button id="options-close" type="button" aria-label="Close Project Chats options">×</button></div>
       <p id="options-copy">Chat here and receive summaries from your work threads.</p>
-      <div class="mgr-setting"><span>Manager</span><button id="enabled" type="button" role="switch" aria-label="Manager enabled" aria-checked="false" disabled><span id="enabled-label">Checking…</span><span class="mgr-switch-track" aria-hidden="true"><i></i></span></button></div>
-      <p class="mgr-modal-note">Turning off pauses new Manager activity. Work already started continues in Chats.</p>
+      <div class="mgr-setting"><span>Project Chats</span><button id="enabled" type="button" role="switch" aria-label="Project Chats enabled" aria-checked="false" disabled><span id="enabled-label">Checking…</span><span class="mgr-switch-track" aria-hidden="true"><i></i></span></button></div>
+      <p class="mgr-modal-note">Turning off pauses new Project Chats activity. Work already started continues in Chats.</p>
       <p id="options-state" class="mgr-modal-note"></p>
     </dialog>
   </main>

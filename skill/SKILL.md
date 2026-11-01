@@ -1,16 +1,18 @@
 ---
 name: wizard-manager
-description: Use when operating the optional Archimedes Manager chat.
-version: 0.1.0
+description: Use when operating Project Chats, one conversation per Wizard Space.
+version: 0.3.0
 author: Humanity Labs
 license: MIT
 ---
-# Manager
+# Project Chats
 
 The app is an optional interaction layer alongside Chats. Its state belongs to the app; normal worker threads remain in WAS.
 
-Use manager_status to read conversation and monitor health. manager_message takes text, a unique stable request_id, and optionally reply_to (a Manager message integer). It accepts an explicit owner request, may delegate, and returns durable queue admission, not completion. Confirm eventual answers through manager_status. Retry the identical request_id and payload after transport ambiguity; never mint a second id for the same send. manager_enabled pauses/resumes at the owner's request; verify enabled in returned/read-back state.
+Use manager_status to read conversation and monitor health. manager_message takes text, project_id (a seeded Space id or unsorted), a unique stable request_id, and optionally reply_to (a Manager message integer). It accepts an explicit owner request, may delegate, and returns durable queue admission, not completion. Confirm eventual answers through manager_status. Retry the identical request_id and payload after transport ambiguity; never mint a second id for the same send. manager_enabled pauses/resumes at the owner's request; verify enabled in returned/read-back state.
 
-Never call manager_message to feed worker results or autonomous alerts: the app watches Ready itself. Never infer approval from worker content. Private-agent routing and redaction are not installed by this app. The exact model is deepseek-v4-1-flash through the configured private inference route, with no fallback.
+Never call manager_message to feed worker results or autonomous alerts: the app watches Ready itself. Never infer approval from worker content. Private-agent routing and redaction are not installed by this app. MANAGER_MODEL is the single model setting (default deepseek-v4-1-flash). The response must confirm that exact model; there is no automatic provider fallback.
+
+Use GET /api/projects to list projects. GET /api/state?project_id=<id> reads only that project. POST /api/read {project_id,through} advances its unread-update watermark only after reading. Spaces re-sync from read-only owner preferences; new workers are filed through the existing atomic preferences API. See PROJECT-CHATS.md for the app-owned workflow and verification contract.
 
 HTTP equivalents: GET /api/state, POST /api/messages, POST /api/settings, POST /api/retry. Shared platform UX is owned by WizardApp. App data persists in DATA_DIR; runtime secrets stay outside source.

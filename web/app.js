@@ -3,7 +3,8 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const core = window.WizardApp?.version === 1 ? window.WizardApp : null;
-  const KEY = 'wizard-manager:conversation:v1';
+  let KEY = 'wizard-manager:conversation:v1';
+  let projectMode = false, activeProject = null, projectSnapshot = [], serverReadAt = 0;
   const input = $('message'), scroller = $('conversation'), thread = $('thread');
   const messages = new Map(), nodes = new Map(), jobNodes = new Map();
   let suppressedSources = new Set(), suppressSourceUpdates = false;
@@ -11,7 +12,7 @@
   let saved = true, hold = null, loaded = false, connected = false, enabled = null, connectionFailed = false;
   let cursor = 0, jobs = [], refreshing = null, submitting = false, togglePending = null;
   let toggleUnknown = false, toggleError = '', pendingTarget = null, confirmLayer = null, optionsLayer = null;
-  let newBelow = 0, pinned = true, scrollFrame = 0, retrying = new Set(), jobErrors = new Set();
+  let pinned = true, scrollFrame = 0, retrying = new Set(), jobErrors = new Set();
   let restoring = true;
   // Seen receipts are separate from the stable catch-up boundary. Fetching never reads.
   let read = { seen: 0, viewed: [], divider: null }, wasVisible = false, returnAtEnd = false;
@@ -28,9 +29,16 @@
     if (!node) divider.remove();
     scroller.scrollTop = top;
   }
-  function persistRead() { draft.read = { ...read, version: 2, viewed: [...read.viewed] }; persist(); }
+  function persistRead() {
+    draft.read = { ...read, version: 2, viewed: [...read.viewed] }; persist();
+    if (projectMode && activeProject && visible() && read.seen > serverReadAt) {
+      const pid = activeProject; serverReadAt = read.seen;
+      api('api/read', {project_id: pid, through: read.seen}).then(r => renderProjects(r.projects)).catch(() => { if (activeProject === pid) serverReadAt = 0; });
+    }
+  }
   function observeRead() {
     if (!loaded || restoring) return;
+    paintJump();
     const on = visible();
     if (!on) {
       dwell.clear();
@@ -193,7 +201,7 @@
       const hasSource = !!source(m), a = attention(m), ask = typeof a.ask === 'string' ? a.ask : '';
       card.classList.toggle('has-source', hasSource);
       card.classList.toggle('has-attention', !!ask || ['blocked', 'failed', 'needs_input', 'needs_approval'].includes(a.state));
-      const label = {needs_you: 'Needs you', check: 'Your call', done: 'Done', fyi: 'Update'}[a.state] || 'Ready';
+      const label = {needs_you: 'Needs you', check: 'Your call', done: 'Done', fyi: 'Update'}[a.state] || 'Update';
       const top = element('div', 'mgr-card-top'); top.append(element('span', '', label), time(m.created));
       card.append(top, element('h2', '', m.title || 'Work thread'), messageText(m, 'mgr-summary'));
       if (ask) card.append(element('p', 'mgr-ask', ask));
@@ -205,7 +213,7 @@
     } else if (m.kind === 'delegation' && source(m)) {
       // Backend emits delegation only after actual downstream run admission.
       const receipt = element('div', 'mgr-receipt');
-      receipt.append(element('strong', '', 'Sent to a work thread · ' + (m.title || 'Work thread')), element('p', '', 'Accepted—not finished yet.'));
+      receipt.append(messageText(m, 'mgr-text'), element('p', '', 'Accepted—not finished yet.'));
       const actions = element('div', 'mgr-actions'); actions.append(link(m, 'Open thread →')); receipt.append(actions); body.append(receipt, time(m.created));
     } else {
       body.append(messageText(m, 'mgr-text'));
@@ -307,7 +315,20 @@
     const first = [...thread.querySelectorAll('[data-message-id]')].find(node => node.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top);
     draft.scroll = { pinned, anchorMessageId: first ? Number(first.dataset.messageId) : null, offset: first ? first.getBoundingClientRect().top - scroller.getBoundingClientRect().top : 0 };
   }
-  function toBottom() { scroller.scrollTop = scroller.scrollHeight; pinned = true; newBelow = 0; $('jump').hidden = true; saveScroll(); persist(); }
+  // Derive the badge from current unread rows and viewport geometry, including
+  // restored history. Arrival counters drift as the reader scrolls or reopens.
+  function paintJump() {
+    if (!loaded || restoring || !visible()) return;
+    const bounds = scroller.getBoundingClientRect();
+    if (bounds.height <= 0) return;
+    const below = [...messages.values()].filter(m => unread(m) &&
+      nodes.get(m.id)?.getBoundingClientRect().bottom > bounds.bottom + 1).length;
+    const jump = $('jump');
+    jump.hidden = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 8;
+    jump.textContent = below ? below + ' new below ↓' : '↓ Latest';
+    jump.setAttribute('aria-label', below ? below + ' unread ' + (below === 1 ? 'message' : 'messages') + ' below. Jump to latest' : 'Jump to latest message');
+  }
+  function toBottom() { scroller.scrollTop = scroller.scrollHeight; pinned = true; paintJump(); saveScroll(); persist(); }
   function reconcileSubmission() {
     const s = draft.sending; if (!s) return;
     const accepted = [...messages.values()].some(m => m.job_id === 'user:' + s.request_id || m.job_id === 'answer:' + s.request_id);
@@ -387,9 +408,8 @@
         scroller.scrollTop += divider.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 80;
       }
       pinned = false;
-      newBelow += newMessages.length; $('jump').textContent = newBelow + ' new below ↓'; $('jump').hidden = false;
       const recent = newMessages.filter(m => m.role === 'assistant').at(-1);
-      if (recent) say(recent.kind === 'ready' ? 'Ready: ' + (recent.title || 'Work thread') : 'Archimedes: ' + recent.text.slice(0, 180));
+      if (recent) say(recent.kind === 'ready' ? 'Update: ' + (recent.title || 'Work thread') : 'Archimedes: ' + recent.text.slice(0, 180));
     }
     if (visible()) { returnAtEnd = false; saveScroll(); persist(); }
     // Recovery/unhide needs a replay of older IDs, not only arrivals. Existing
@@ -404,7 +424,12 @@
         let page, replay;
         do {
           const before = cursor;
-          page = await api('api/state?after=' + cursor); replay = merge(page);
+          const selected = activeProject;
+          page = await api('api/state?after=' + cursor + '&project_id=' + encodeURIComponent(selected || 'unsorted'));
+          if (selected !== activeProject) return false;
+          if (page.projects) { projectMode = true; renderProjects(page.projects); }
+          if (projectMode && !activeProject) { enabled = page.enabled; connected = true; loaded = true; renderControls(); return true; }
+          replay = merge(page);
           if ((page.has_more || page.messages.length) && cursor <= before) throw new Error('State cursor did not advance');
           if (replay) cursor = 0;
         } while (replay || (page.has_more ?? page.messages.length === 1000));
@@ -419,7 +444,7 @@
           else if (pinned) scroller.scrollTop = scroller.scrollHeight;
           saveScroll(); persist();
         }
-        renderControls(); return true;
+        renderControls(); paintJump(); return true;
       } catch (_) { connected = false; connectionFailed = true; renderControls(); return false; }
       finally { refreshing = null; }
     })();
@@ -441,7 +466,7 @@
     if (!persist()) { submitting = false; s.state = 'uncertain'; renderControls(); return; }
     renderControls(); toBottom();
     try {
-      const result = await api('api/messages', { text: s.text, request_id: s.request_id, ...(s.reply_to == null ? {} : { reply_to: s.reply_to }) });
+      const result = await api('api/messages', { text: s.text, request_id: s.request_id, project_id: s.project_id || activeProject || 'unsorted', ...(s.reply_to == null ? {} : { reply_to: s.reply_to }) });
       if (result.accepted !== true || result.request_id !== s.request_id) throw new Error('No admission receipt');
       // Read back the actual user turn before clearing the exact submitted revision.
       await refresh();
@@ -507,15 +532,14 @@
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && pendingTarget && !$('options').open) { event.preventDefault(); cancelTarget(); input.focus(); } });
   $('compose').onsubmit = event => {
     event.preventDefault(); if ($('send').disabled) return;
-    draft.sending = { request_id: crypto.randomUUID(), rev: draft.rev, text: input.value.trim(), draftText: input.value, reply_to: draft.target?.reply_to ?? null, target: draft.target ? { ...draft.target } : null, state: 'sending' };
+    draft.sending = { request_id: crypto.randomUUID(), project_id: activeProject || 'unsorted', rev: draft.rev, text: input.value.trim(), draftText: input.value, reply_to: draft.target?.reply_to ?? null, target: draft.target ? { ...draft.target } : null, state: 'sending' };
     if (!persist()) { renderControls(); return; }
     void submitSnapshot();
   };
   scroller.addEventListener('scroll', () => {
     if (restoring || !visible()) return;
     pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
-    if (pinned) { newBelow = 0; $('jump').hidden = true; }
-    if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; saveScroll(); persist(); });
+    if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; paintJump(); saveScroll(); persist(); });
   }, { passive: true });
   addEventListener('pagehide', () => { saveScroll(); persist(); });
   addEventListener('offline', renderControls);
@@ -528,23 +552,73 @@
       document.querySelector('.mgr').style.height = (window.visualViewport?.height || innerHeight) + 'px';
     } else document.querySelector('.mgr').style.removeProperty('height');
     resizeInput(); if (!restoring && visible()) scroller.scrollTop = top;
+    paintJump();
   }
+  function renderProjects(projects) {
+    if (!Array.isArray(projects) || !$('project-list')) return;
+    projectSnapshot = projects;
+    $('project-list').hidden = !!activeProject;
+    $('project-nav').hidden = !activeProject;
+    scroller.hidden = !activeProject; $('compose').hidden = !activeProject;
+    const current = projects.find(p => p.id === activeProject);
+    $('project-title').textContent = current?.name || 'Project Chats';
+    $('project-running').textContent = current ? current.running + ' running' : '';
+    if (activeProject && !current) { selectProject(null); return; }
+    const signature = JSON.stringify(projects);
+    if ($('project-list').dataset.signature === signature) return;
+    $('project-list').dataset.signature = signature;
+    const title = element('h1', 'project-heading', 'Project Chats');
+    const copy = element('p', 'project-intro', 'One conversation for each Space. Work happens in linked threads.');
+    const rows = projects.map(p => {
+      const row = element('button', 'project-row'); row.type = 'button'; row.dataset.projectId = p.id;
+      row.setAttribute('aria-label', p.name + (p.unread ? ', ' + p.unread + ' unread updates' : ''));
+      const mark = element('span', 'project-mark', p.name.slice(0,1).toUpperCase());
+      const content = element('span', 'project-content');
+      const top = element('span', 'project-top'); top.append(element('strong', '', p.name));
+      top.append(element('span', 'project-running', p.running + ' running'));
+      const preview = element('span', 'project-preview', p.preview);
+      content.append(top, preview); row.append(mark, content);
+      if (p.unread) row.append(element('span', 'project-unread', p.unread));
+      row.onclick = () => selectProject(p.id); return row;
+    });
+    $('project-list').replaceChildren(title, copy, ...rows);
+  }
+  function selectProject(pid) {
+    if (pid === activeProject) return;
+    if (activeProject) { saveScroll(); if (!persist()) return; }
+    // Paint the destination before any I/O. An in-flight state response is
+    // pinned to its project and discarded by refresh when the selection changes.
+    activeProject = pid;
+    renderProjects(projectSnapshot);
+    cursor = 0; loaded = false; restoring = true; serverReadAt = 0;
+    messages.clear(); nodes.clear(); jobNodes.clear(); richText.clear(); panels.clear(); dwell.clear();
+    thread.replaceChildren(); divider.remove(); jobs = []; inventoryKey = ''; resolveThreads = window.ManagerThreadLinks.resolver([]);
+    read = {seen: 0, viewed: [], divider: null}; wasVisible = false;
+    draft = {rev: 0, text: '', target: null, sending: null, scroll: {pinned: true}, receipts: {}};
+    KEY = 'wizard-manager:project:' + (pid || 'unsorted') + ':v1';
+    saved = true; restore(); input.value = draft.text;
+    renderControls(); resizeInput(); core?.back?.changed?.();
+    const pending = refreshing || Promise.resolve();
+    pending.finally(() => { void refresh(); });
+  }
+  if ($('project-back')) $('project-back').onclick = () => selectProject(null);
   restore(); input.value = draft.text;
   $('header-portrait').append(portrait()); $('empty-portrait').append(portrait(true));
   if (core) {
     // The host owns the recording/request journal. Capture reply_to at recording
     // start; subsequent draft edits never retarget or get consumed by an orb send.
     (core.voiceInput || core.conversation)?.register({
-      snapshot: () => ({ replyTo: draft.target?.reply_to ?? null, label: draft.target ? 'Manager · reply in ' + draft.target.title : 'Manager conversation' }),
+      snapshot: () => ({ projectId: activeProject, replyTo: draft.target?.reply_to ?? null, label: draft.target ? 'Manager · reply in ' + draft.target.title : 'Manager conversation' }),
       async receive({ request_id, text, target }, authorize) {
         if (!/^[A-Za-z0-9_-]{8,100}$/.test(request_id || '') || typeof text !== 'string' || !text.trim() || text.length > 12000 || !target || (target.replyTo !== null && (!Number.isSafeInteger(target.replyTo) || target.replyTo <= 0))) throw new Error('Invalid Manager conversation message');
+        if (projectMode && (!target.projectId || target.projectId !== activeProject)) throw new Error('Open the original project before sending this voice message.');
         await refresh();
         // Reconcile first: a lost acknowledgement must not duplicate an accepted turn.
         const accepted = () => [...messages.values()].some(m => m.role === 'user' && m.job_id === 'user:' + request_id && m.text === text);
         if (accepted()) return { accepted: true, request_id };
         if (!canOperate()) throw new Error('Manager paused or offline · nothing sent');
         authorize(); // revalidate pinned live document AFTER async state read, immediately before POST
-        const receipt = await api('api/messages', { text, request_id, ...(target.replyTo === null ? {} : { reply_to: target.replyTo }) });
+        const receipt = await api('api/messages', { text, request_id, project_id: target.projectId || 'unsorted', ...(target.replyTo === null ? {} : { reply_to: target.replyTo }) });
         if (receipt.accepted !== true || receipt.request_id !== request_id) throw new Error('Manager admission uncertain');
         if (refreshing) await refreshing;
         if (!await refresh() || !accepted()) throw new Error('Manager readback uncertain · retry original');
@@ -552,8 +626,8 @@
         return { accepted: true, request_id };
       },
     });
-    core.back.register({ canGoBack: () => !!draft.target, back: () => { if (!draft.target) return false; clearTarget(); return true; } });
-    core.ready({ name: 'wizard-manager', version: '0.2.0' }).then(() => {
+    core.back.register({ canGoBack: () => !!draft.target || !!activeProject, back: () => { if (draft.target) { clearTarget(); return true; } if (activeProject) { selectProject(null); return true; } return false; } });
+    core.ready({ name: 'wizard-manager', version: '0.3.0' }).then(() => {
       document.documentElement.classList.toggle('wz-hosted', core.hosted);
       if (!saved) hold ||= core.update.hold('unsaved Manager draft');
       viewport();
