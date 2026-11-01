@@ -26,7 +26,7 @@ before(async () => {
     const pathname = new URL(req.url, 'http://fixture').pathname;
     if (pathname.includes('/api/')) { res.writeHead(500); return res.end('Live API forbidden in frontend tests'); }
     if (pathname === '/host') { res.setHeader('Content-Type', 'text/html'); return res.end(fixtureHost); }
-    const file = pathname === '/wizard-os-home/core/app-client.js' ? process.env.CORE_CLIENT : path.join(root, pathname === '/' ? 'index.html' : pathname.slice(1));
+  const file = pathname === '/wizard-os-home/core/app-client.js' ? process.env.CORE_CLIENT : pathname === '/wizard-os-home/core/chat-kit.js' ? (process.env.CORE_CHAT_KIT || path.join(path.dirname(process.env.CORE_CLIENT), 'chat-kit.js')) : path.join(root, pathname === '/' ? 'index.html' : pathname.slice(1));
     if (pathname.includes('..') || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); return res.end(); }
     res.setHeader('Content-Type', ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.webp': 'image/webp' })[path.extname(file)] || 'text/plain');
     res.end(fs.readFileSync(file));
@@ -50,6 +50,10 @@ async function setup(t, options = {}) {
     if (custom && await custom(route, req, url)) return;
     const fulfill = data => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) });
     if (url.pathname === '/api/state') return fulfill({ ...state, messages: state.messages.filter(m => m.id > Number(url.searchParams.get('after') || 0)).slice(0, 1000) });
+    if (url.pathname === '/api/worker-context') {
+      const m = state.messages.find(m => m.id === Number(url.searchParams.get('message_id')));
+      return fulfill({ source_id: m.source_id, title: m.title, state: 'done', text: '## Worker report\n\n**Verified fixture** report for ' + m.title });
+    }
     const body = req.postDataJSON(); posts.push({ path: url.pathname, body });
     if (url.pathname === '/api/messages') {
       if (!state.messages.some(m => m.job_id === 'user:' + body.request_id)) {
@@ -130,7 +134,7 @@ for (const viewport of [{width:390,height:844},{width:1280,height:900}]) test(`m
 test('hidden sources purge retained cards and receipt metadata without losing user text; recovery replays older IDs', async t => {
   const hidden = ready(1, 'Hidden source title');
   const f = await setup(t, {state:{messages:[hidden, user(2,'fixture-user','Keep my words'), ready(3,'Archived genuine result')], suppressed_sources:[]}});
-  await f.frame.locator('[data-ready-id="1"] button').click();
+  await f.frame.locator('[data-ready-id="1"]').click(); await f.frame.getByRole('button', {name:'Reply in this project', exact:true}).click();
   await f.frame.locator('#message').fill('Keep my unsent draft');
   await f.frame.evaluate(() => { window.keptUserNode = document.querySelector('[data-message-id="2"]'); });
   f.state.suppressed_sources = [hidden.source_id];
@@ -198,7 +202,9 @@ test('explicit canonical links escape labels, reject arbitrary URLs and block na
   assert.equal(await f.frame.locator('.mgr-text img').count(), 0);
   assert.equal(await f.frame.locator('.mgr-text a').count(), 1);
   assert.equal(await f.frame.locator('.mgr-text a').textContent(), '<img src=x onerror=alert(1)>');
-  assert.equal(await f.frame.locator('.mgr-actions a').getAttribute('href'), '/wizard-os-home/?session=original', 'existing source link remains');
+  await f.frame.locator('.mgr-context-chip').click();
+  assert.equal(await f.frame.locator('.mgr-context-actions a').getAttribute('href'), '/wizard-os-home/?session=original', 'source link remains inside context');
+  await f.frame.getByRole('button',{name:'Close worker context',exact:true}).click();
   await f.frame.locator('#message').fill('Unsent draft');
   await f.frame.evaluate(() => { Storage.prototype.setItem = () => { throw new Error('fixture storage failure'); }; });
   await f.frame.locator('.mgr-text a').click();
@@ -230,19 +236,71 @@ test('empty is honest; standalone and hosted identity, width, and transparent in
   assert.equal(await f.frame.locator('#announcer').textContent(), '');
   if (evidence) await f.page.screenshot({ path: path.join(evidence, 'empty-desktop.png') });
 });
+test('thin worker states keep outcome semantics without cards', async t => {
+  const f=await setup(t,{state:{messages:[ready(1,'Done worker',{attention:JSON.stringify({state:'done',ask:'Nothing needed'})}),ready(2,'Needs worker',{attention:JSON.stringify({state:'needs_you',ask:'Reply GO'})}),ready(3,'Check worker',{attention:JSON.stringify({state:'check'})}),ready(4,'FYI worker',{attention:JSON.stringify({state:'fyi'})})]}});
+  assert.deepEqual(await f.frame.locator('.mgr-chip-state').allTextContents(),['done','needs you','your call','update']);
+  assert.equal(await f.frame.locator('.mgr-card').count(),0);
+  assert.doesNotMatch(await f.frame.locator('[data-message-id="1"]').textContent(),/Nothing needed/);
+});
+
+test('worker chips paint a scoped Markdown overlay before a delayed read; Back and outside tap stay in chat', async t => {
+  let release; const gate = new Promise(r => { release = r; });
+  const f = await setup(t, {hosted:true, state:{messages:[ready(1,'Overlay worker')]}, route: async (route, req, url) => {
+    if (url.pathname !== '/api/worker-context') return false;
+    assert.equal(url.searchParams.get('message_id'),'1');
+    assert.equal(url.searchParams.get('project_id'),'unsorted');
+    await gate;
+    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({source_id:'thread/1',title:'Overlay worker',state:'done',text:'## Full report\n\n**Verified fixture**\n\n- One\n- Two\n\n<script>alert(1)</script>\n![remote](https://example.invalid/track.png)'})});return true;
+  }});
+  const url=f.page.url();
+  await f.frame.locator('.mgr-context-chip').click();
+  assert.equal(await f.frame.locator('#worker-context').evaluate(n=>n.open),true);
+  assert.match(await f.frame.locator('.mgr-context-report').textContent(),/Loading/);
+  await f.page.waitForTimeout(5000);
+  assert.equal(await f.frame.locator('#worker-context').evaluate(n=>n.open),true);
+  release(); await f.frame.locator('.mgr-context-report h2').waitFor();
+  assert.equal(await f.frame.locator('.mgr-context-report strong').textContent(),'Verified fixture');
+  assert.equal(await f.frame.locator('.mgr-context-report li').count(),2);
+  assert.equal(await f.frame.locator('.mgr-context-report img,.mgr-context-report script').count(),0);
+  assert.equal(f.page.url(),url); assert.equal(f.posts.length,0);
+  await f.page.locator('#back').click();
+  assert.equal(await f.frame.locator('#worker-context').evaluate(n=>n.open),false);
+  await f.frame.locator('.mgr-context-chip').click();
+  await f.frame.locator('body').click({position:{x:4,y:4},force:true});
+  assert.equal(await f.frame.locator('#worker-context').evaluate(n=>n.open),false);
+  assert.equal(f.page.url(),url);
+});
+
+test('project reply survives context close and late context cannot reopen a closed panel', async t => {
+  let release;const gate=new Promise(r=>{release=r});
+  const f=await setup(t,{hosted:true,state:{messages:[ready(1,'Reply worker')]},route:async(route,req,url)=>{
+    if(url.pathname!='/api/worker-context')return false;await gate;await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({source_id:'thread/1',title:'Reply worker',text:'Late fixture response'})});return true;
+  }});
+  await f.frame.locator('.mgr-context-chip').click();
+  await f.frame.getByRole('button',{name:'Reply in this project',exact:true}).click();
+  assert.equal((await f.draft()).target.reply_to,1);
+  release();await f.page.waitForTimeout(100);
+  assert.equal(await f.frame.locator('#worker-context').evaluate(n=>n.open),false);
+  assert.equal(await f.frame.locator('.mgr-context-report').textContent(),'');
+  await f.frame.locator('#message').fill('Reply remains here');await f.frame.locator('#send').click();
+  await f.frame.locator('.mgr-user').waitFor();
+  assert.equal(f.posts.find(p=>p.path==='/api/messages').body.reply_to,1);
+  assert.match(await f.frame.locator('.mgr-user').textContent(),/↪ to Reply worker/);
+});
+
 test('Ready content is inert, faithful structured ask; stable exact card targeting and Back layers', async t => {
   const f = await setup(t, { hosted: true, state: { messages: [ready(1, 'First thread', { attention: JSON.stringify({ state: 'needs_approval', ask: 'May I publish this draft?', buttons: ['Approve everything'] }), text: '<img src=x onerror=alert(1)> Worker text.' }), ready(2, 'Second thread')] } });
   assert.equal(await f.frame.locator('.mgr-summary img').count(), 0);
   assert.match(await f.frame.locator('.mgr-ask').textContent(), /May I publish/);
   assert.equal(await f.frame.getByRole('button', { name: 'Approve everything' }).count(), 0);
-  assert.equal(await f.frame.locator('[data-ready-id="1"] a').getAttribute('href'), '/wizard-os-home/?session=thread%2F1');
-  assert.equal(await f.frame.locator('[data-ready-id="1"] a').getAttribute('target'), '_top');
+  assert.equal(await f.frame.locator('.mgr-card').count(), 0);
+  assert.equal(await f.frame.locator('[data-ready-id="1"]').getAttribute('aria-haspopup'), 'dialog');
   await f.frame.locator('#message').fill('Please approve the publication');
-  await f.frame.locator('[data-ready-id="1"] button').click();
-  assert.match(await f.frame.locator('#confirmation').textContent(), /Reply in First thread instead/);
+  await f.frame.locator('[data-ready-id="1"]').click(); await f.frame.getByRole('button', {name:'Reply in this project', exact:true}).click();
+  assert.match(await f.frame.locator('#confirmation').textContent(), /Reply to First thread instead/);
   await f.page.locator('#back').click();
   assert.equal(await f.frame.locator('#confirmation').isVisible(), false);
-  await f.frame.locator('[data-ready-id="1"] button').click();
+  await f.frame.locator('[data-ready-id="1"]').click(); await f.frame.getByRole('button', {name:'Reply in this project', exact:true}).click();
   await f.frame.getByRole('button', { name: 'Switch to First thread', exact: true }).click();
   assert.equal((await f.draft()).target.reply_to, 1);
   await f.frame.locator('#options-open').click();
@@ -259,13 +317,13 @@ test('Ready content is inert, faithful structured ask; stable exact card targeti
 });
 test('durable admission is not delivery; actual user nodes dedupe and later answer unlocks delivery', async t => {
   const f = await setup(t, { state: { messages: [ready(1, 'Source result')] } });
-  await f.frame.locator('[data-ready-id="1"] button').click();
+  await f.frame.locator('[data-ready-id="1"]').click(); await f.frame.getByRole('button', {name:'Reply in this project', exact:true}).click();
   await f.frame.locator('#message').fill('Yes, publish the approved draft.');
   await f.frame.locator('#send').click();
   await f.frame.waitForFunction(() => document.querySelectorAll('.mgr-user').length === 1 && !document.getElementById('message').value);
   const sent = f.posts.find(p => p.path === '/api/messages').body;
   assert.equal(sent.reply_to, 1);
-  assert.match(await f.frame.locator('.mgr-user').textContent(), /↳ to Source result/);
+  assert.match(await f.frame.locator('.mgr-user').textContent(), /↪ to Source result/);
   assert.match(await f.frame.locator('.mgr-user').textContent(), /Waiting for thread delivery/);
   assert.doesNotMatch(await f.frame.locator('.mgr-user').textContent(), /Delivered/);
   await f.frame.locator('#message').fill('Another request');
@@ -274,7 +332,7 @@ test('durable admission is not delivery; actual user nodes dedupe and later answ
   f.state.messages.push({ ...answer(3, sent.request_id), kind: 'delegation', source_id: 'thread/1', title: 'Source result' }); f.state.jobs = [];
   await f.poll();
   assert.match(await f.frame.locator('.mgr-user').textContent(), /Delivered to thread/);
-  assert.match(await f.frame.locator('.mgr-receipt').textContent(), /Accepted—not finished yet/);
+  assert.match(await f.frame.locator('.mgr-context-chip').last().textContent(), /Source result/);
 });
 test('acceptance clears only submitted revision, not newer typing or new target', async t => {
   const f = await setup(t); let release; const gate = new Promise(r => { release = r; });
@@ -353,7 +411,7 @@ test('storage failure gates send and source navigation, keeps an update hold', a
   await f.frame.locator('#message').fill('Not durable yet');
   assert.equal(await f.frame.locator('#storage-state').isVisible(), true); assert.equal(await f.frame.locator('#send').isEnabled(), false);
   assert.ok(await f.page.evaluate(() => window.holds > 0));
-  await f.frame.locator('.mgr-actions a').click(); assert.ok(f.page.url().endsWith('/host'));
+  await f.frame.locator('.mgr-context-chip').click(); await f.frame.locator('.mgr-context-actions a').click(); assert.ok(f.page.url().endsWith('/host'));
   assert.equal(await f.frame.locator('#message').inputValue(), 'Not durable yet'); assert.equal(f.posts.length, 0);
 });
 test('touch Enter and IME never submit; explicit control-enter sends', async t => {
@@ -368,7 +426,7 @@ test('touch Enter and IME never submit; explicit control-enter sends', async t =
 test('all five appearance fixtures preserve draft, target, message identity, selection, and scroll', async t => {
   const history = Array.from({ length: 24 }, (_, i) => ready(i + 1, 'A long source title that stays readable on a small phone ' + i));
   const f = await setup(t, { hosted: true, viewport: { width: 360, height: 740 }, state: { messages: history } });
-  await f.frame.locator('[data-ready-id="24"] button').click(); await f.frame.locator('#message').fill('Saved draft across skins');
+  await f.frame.locator('[data-ready-id="24"]').click(); await f.frame.getByRole('button', {name:'Reply in this project', exact:true}).click(); await f.frame.locator('#message').fill('Saved draft across skins');
   await f.frame.evaluate(() => { window.originalNode = document.querySelector('[data-message-id="1"]'); const s = document.getElementById('conversation'); s.scrollTop = 160; const n = document.getElementById('message'); n.focus(); n.setSelectionRange(2, 8); });
   await f.page.waitForTimeout(80);
   const top = await f.frame.locator('#conversation').evaluate(n => n.scrollTop);
@@ -403,9 +461,9 @@ test('pagination drains beyond 1000 messages before validating restored reply ta
 });
 test('portrait load failure shows named monogram; missing source retains full text and disables reply', async t => {
   const f = await setup(t, { state: { messages: [ready(1, 'Unavailable source', { source_id: null, source_available: false, text: 'Full retained summary. '.repeat(40) })] }, init: () => { document.addEventListener('DOMContentLoaded', () => { for (const img of document.querySelectorAll('img')) img.dispatchEvent(new Event('error')); }); } });
-  assert.match(await f.frame.locator('.mgr-card').textContent(), /This thread isn’t available anymore/);
-  assert.equal(await f.frame.locator('.mgr-card button').isEnabled(), false);
-  assert.equal(await f.frame.locator('.mgr-card a').count(), 0);
+  assert.match(await f.frame.locator('.mgr-body').textContent(), /This thread isn’t available anymore/);
+  assert.equal(await f.frame.locator('.mgr-context-chip').isEnabled(), false);
+  assert.equal(await f.frame.locator('.mgr-body a').count(), 0);
   assert.equal(await f.frame.locator('.mgr-summary').evaluate(n => getComputedStyle(n).webkitLineClamp), 'none');
   assert.ok(await f.frame.locator('span.mgr-face').count() > 0);
 });

@@ -68,6 +68,20 @@ class ReadySource:
                     'AND coalesce(hidden,0)=0 AND parent_session_id IS NULL', batch))
         return ids - allowed
 
+    def latest_response(self, sid):
+        """Exact visible ordinary source only; no tool/internal or sibling content."""
+        with closing(self.open()) as c:
+            row = c.execute('''SELECT m.id,m.content,m.timestamp FROM messages m
+                JOIN sessions s ON s.id=m.session_id
+                WHERE m.session_id=? AND s.parent_session_id IS NULL AND coalesce(s.hidden,0)=0
+                AND m.role='assistant' AND coalesce(m.display_kind,'') IN ('','final')
+                AND coalesce(m.tool_calls,'') IN ('','[]','null')
+                AND length(trim(coalesce(m.content,'')))>0 ORDER BY m.id DESC LIMIT 1''', (sid,)).fetchone()
+        if not row:
+            return None
+        return {'source_message': str(row['id']), 'text': MARKER.sub('', row['content']).strip(),
+                'created': row['timestamp'], 'attention': attention(row['content']) or {}}
+
     def head(self):
         with closing(self.open()) as c:
             return int(c.execute('SELECT coalesce(max(id),0) FROM messages').fetchone()[0])

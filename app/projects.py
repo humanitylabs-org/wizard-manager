@@ -148,6 +148,41 @@ class ProjectManager(Manager):
                 'monitor': {'last_scan': self.last_scan, 'error': self.spaces_error or self.error, 'pending': pending},
                 'model_calls': self.model_calls, 'version': '0.3.0'}
 
+    def worker_context(self, project_id, message_id):
+        """On-demand report for a linked message, never an arbitrary session lookup."""
+        self.sync_projects()
+        self.require_project(project_id)
+        with self.connect() as c:
+            row = c.execute("SELECT * FROM messages WHERE id=? AND project_id=? AND role='assistant' AND source_id IS NOT NULL",
+                            (message_id, project_id)).fetchone()
+        if not row:
+            raise Problem(404, 'This update is not available in this project.')
+        sid = row['source_id']
+        if (not self.safe_worker(sid) or sid not in self.members(project_id) or self.blocked_sources([sid])):
+            raise Problem(404, 'This worker is not available in this project.')
+        try:
+            # Revalidate privacy/agent/visibility against the same authority used
+            # by summaries before reading any source content; archives stay readable.
+            source = self.request(self.was + '/api/sessions/' + quote(sid, safe=''), timeout=4).get('session')
+            if not isinstance(source, dict) or source.get('id') != sid or not visible({**source, 'archived': False}):
+                raise Problem(404, 'This worker is no longer available.')
+            if not self.ready_source:
+                raise Problem(503, 'Worker context is not configured on this installation.')
+            report = self.ready_source.latest_response(sid)
+            # Membership/visibility can change during a slow read. Do not publish
+            # a response after a hide or Space move.
+            self.sync_projects()
+            if sid not in self.members(project_id) or self.blocked_sources([sid]):
+                raise Problem(404, 'This worker is no longer available in this project.')
+        except Problem:
+            raise
+        except Exception:
+            raise Problem(503, 'Could not load this worker’s response. Try again.')
+        if not report:
+            raise Problem(404, 'This worker has not posted a response yet.')
+        return {**report, 'source_id': sid, 'title': source.get('title') or row['title'] or 'Work thread',
+                'state': report['attention'].get('state') or source.get('status') or source.get('wizard_last_run_status') or 'idle'}
+
     def summarize(self):
         # Inherited pending rows are not new authority. Only current indexed
         # workers can produce a project update, including after migration/moves.

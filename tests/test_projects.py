@@ -49,6 +49,37 @@ class ProjectTests(unittest.TestCase):
         with self.m.connect() as c:
             return dict(c.execute('SELECT * FROM jobs WHERE id=?', (ident,)).fetchone())
 
+    def test_worker_context_scoped_revalidated_and_never_reads_other_sources(self):
+        self.ready.add(sid='work_alpha'); self.m.scan(); self.m.summarize()
+        msg = self.m.state(project_id='alpha')['messages'][0]
+        calls = []
+        def latest(sid):
+            calls.append(sid)
+            return {'text': '## Full real report', 'attention': {'state': 'done'}, 'source_message': 'fixture'}
+        self.ready.latest_response = latest
+        result = self.m.worker_context('alpha', msg['id'])
+        self.assertEqual(result['text'], '## Full real report')
+        self.assertEqual(result['source_id'], 'work_alpha')
+        self.assertEqual(calls, ['work_alpha'])
+        for project, ident in [('beta', msg['id']), ('alpha', 99999)]:
+            with self.assertRaises(Problem): self.m.worker_context(project, ident)
+        self.api.sessions[0]['private'] = True
+        with self.assertRaises(Problem): self.m.worker_context('alpha', msg['id'])
+        self.assertEqual(calls, ['work_alpha'])
+        self.api.sessions[0].pop('private')
+        self.spaces[0]['threads'] = []; self.save()
+        with self.assertRaises(Problem): self.m.worker_context('alpha', msg['id'])
+        self.assertEqual(calls, ['work_alpha'])
+
+    def test_worker_context_discards_a_report_after_space_move(self):
+        self.ready.add(sid='work_alpha'); self.m.scan(); self.m.summarize()
+        msg = self.m.state(project_id='alpha')['messages'][0]
+        def moved(sid):
+            self.spaces[0]['threads'] = []; self.save()
+            return {'text': 'Must not escape', 'attention': {}, 'source_message': 'fixture'}
+        self.ready.latest_response = moved
+        with self.assertRaises(Problem): self.m.worker_context('alpha', msg['id'])
+
     def test_seed_resync_rename_remove_and_unsorted(self):
         self.assertEqual([p['name'] for p in self.m.project_list()], ['Alpha', 'Beta', 'Unsorted'])
         self.spaces[0]['name'] = 'Renamed'

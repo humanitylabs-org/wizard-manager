@@ -15,4 +15,6 @@ Never call manager_message to feed worker results or autonomous alerts: the app 
 
 Use GET /api/projects to list projects. GET /api/state?project_id=<id> reads only that project. POST /api/read {project_id,through} advances its unread-update watermark only after reading. Spaces re-sync from read-only owner preferences; new workers are filed through the existing atomic preferences API. See PROJECT-CHATS.md for the app-owned workflow and verification contract.
 
+Worker updates read as ordinary chat text with a thin worker/state chip. Tapping the chip opens an opaque in-chat context overlay using GET /api/worker-context?project_id=<id>&message_id=<linked-update-id>. The latest full response is fetched only for that project's visible ordinary worker, rendered with the shared Markdown kit, never a global transcript cache. Back/outside tap closes it. “Reply in this project” targets the main composer; it posts a user bubble in this project with a ↪ to quote and uses the existing relay. No replies originate in a separate worker chat; the secondary full-thread link is optional inspection only.
+
 HTTP equivalents: GET /api/state, POST /api/messages, POST /api/settings, POST /api/retry. Shared platform UX is owned by WizardApp. App data persists in DATA_DIR; runtime secrets stay outside source.

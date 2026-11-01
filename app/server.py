@@ -85,6 +85,9 @@ class Handler(BaseHTTPRequestHandler):
                 after = max(0, int(parse_qs(urlsplit(self.path).query).get('after', ['0'])[0]))
                 project_id = parse_qs(urlsplit(self.path).query).get('project_id', ['unsorted'])[0]
                 return self.send(200, manager.state(after, project_id))
+            if path == '/api/worker-context':
+                query = parse_qs(urlsplit(self.path).query)
+                return self.send(200, manager.worker_context(query.get('project_id', ['unsorted'])[0], int(query.get('message_id', ['0'])[0])))
             if path == '/api/projects':
                 return self.send(200, {'projects': manager.project_list()})
             if path == '/openapi.json':

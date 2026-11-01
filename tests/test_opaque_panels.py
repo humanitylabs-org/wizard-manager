@@ -12,7 +12,7 @@ class OpaquePanelSourceTests(unittest.TestCase):
 
     def test_floating_text_panels_use_shared_opaque_roles(self):
         css=(pathlib.Path(__file__).resolve().parents[1]/'web/styles.css').read_text()
-        for selector in ('.mgr-options', '.mgr-jump'):
+        for selector in ('.mgr-options', '.mgr-jump', '.mgr-context'):
             with self.subTest(selector=selector):
                 match=re.search(re.escape(selector)+r'\s*\{([^}]+)',css)
                 assert match is not None, selector

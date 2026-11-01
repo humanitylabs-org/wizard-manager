@@ -143,6 +143,17 @@
         }
       }
     },
+    "/api/worker-context": {
+      "get": {
+        "summary": "Read a linked worker’s latest full Markdown response inside this project",
+        "description": "Required project_id and message_id identify an existing assistant update/receipt. Revalidates ordinary-agent visibility, privacy, membership and canonical hidden state before scoped Ready history access. No arbitrary session reads; no stored transcript cache.",
+        "parameters": [
+          {"name":"project_id","in":"query","required":true,"schema":{"type":"string"}},
+          {"name":"message_id","in":"query","required":true,"schema":{"type":"integer","minimum":1}}
+        ],
+        "responses": {"200":{"description":"Latest report"},"404":{"description":"Unavailable worker or project"},"503":{"description":"Context temporarily unavailable"}}
+      }
+    },
     "/api/projects": {
       "get": {
         "summary": "List active seeded projects with unread update counts, running workers and last preview",

@@ -52,7 +52,7 @@
     }
     if (!wasVisible) { wasVisible = true; void refresh(); }
     const bounds = scroller.getBoundingClientRect(), now = Date.now(); let changed = false;
-    if (bounds.height <= 0 || $('options').open) { dwell.clear(); return; }
+    if (bounds.height <= 0 || $('options').open || $('worker-context')?.open) { dwell.clear(); return; }
     for (const m of messages.values()) {
       if (!unread(m)) continue;
       const r = nodes.get(m.id)?.getBoundingClientRect();
@@ -188,6 +188,68 @@
     const m = messages.get(draft.target.reply_to);
     return loaded && (!m || !source(m) || m.source_id !== draft.target.source_id || (draft.target.source_message && m.source_message !== draft.target.source_message));
   }
+  // Context is a domain overlay, not a second worker conversation/composer.
+  let contextLayer = null, contextMessage = null, contextGeneration = 0, contextOpener = null;
+  const contextDialog = element('dialog', 'mgr-context'); contextDialog.id = 'worker-context';
+  contextDialog.setAttribute('aria-labelledby', 'worker-context-title');
+  const contextHead = element('div', 'mgr-modal-head');
+  const contextTitle = element('h2', '', 'Worker context'); contextTitle.id = 'worker-context-title';
+  const contextClose = action('×', closeContext); contextClose.setAttribute('aria-label', 'Close worker context');
+  contextHead.append(contextTitle, contextClose);
+  const contextState = element('p', 'mgr-context-state');
+  const contextReport = element('div', 'mgr-context-report'); contextReport.setAttribute('aria-live', 'polite');
+  const contextActions = element('div', 'mgr-context-actions');
+  contextDialog.append(contextHead, contextState, contextReport, contextActions); document.querySelector('.mgr').append(contextDialog);
+  function closeContext() {
+    contextGeneration++; contextMessage = null;
+    if (contextDialog.open) contextDialog.close();
+    contextLayer?.release(); contextLayer = null;
+    contextReport.replaceChildren(); contextActions.replaceChildren();
+    contextTitle.textContent = 'Worker context'; contextState.textContent = '';
+    contextOpener?.focus(); contextOpener = null;
+  }
+  contextDialog.addEventListener('cancel', event => { event.preventDefault(); closeContext(); });
+  // WizardApp owns outside-tap admission for native dialogs and dispatches cancel.
+  function stateLabel(m) {
+    return ({done:'done', needs_you:'needs you', needs_approval:'needs you', needs_input:'needs you', check:'your call', fyi:'update'})[attention(m).state] || attention(m).state || (m.kind === 'delegation' ? (/^→ continuing/.test(m.text) ? 'continuing' : 'new thread') : 'update');
+  }
+  function contextChip(m) {
+    const chip = element('button', 'mgr-context-chip'); chip.type = 'button';
+    chip.dataset.readyId = String(m.id); chip.setAttribute('aria-haspopup', 'dialog');
+    chip.append(element('span', 'mgr-chip-title', m.title || 'Work thread'), element('span', 'mgr-chip-state', stateLabel(m)), element('span', 'mgr-chip-arrow', '›'));
+    chip.disabled = !source(m); chip.onclick = () => openContext(m, chip);
+    return chip;
+  }
+  async function openContext(m, opener) {
+    if (!source(m)) return;
+    if (contextDialog.open) closeContext();
+    contextOpener = opener; contextMessage = m;
+    const generation = ++contextGeneration;
+    contextTitle.textContent = m.title || 'Work thread'; contextState.textContent = stateLabel(m);
+    contextReport.replaceChildren(element('p', '', 'Loading worker’s latest response…'));
+    const reply = action('Reply in this project', () => { const target = targetOf(m); closeContext(); chooseTarget(target); });
+    const full = link(m, 'Open full thread'); full.onclick = () => closeContext();
+    contextActions.replaceChildren(reply, full);
+    contextDialog.showModal(); contextLayer = core?.back.push(() => { closeContext(); return true; }); contextClose.focus();
+    // The panel is already painted before the scoped read starts. No transcript
+    // cache: switching project/closing/rehiding invalidates late responses.
+    try {
+      const result = await api('api/worker-context?project_id=' + encodeURIComponent(activeProject || 'unsorted') + '&message_id=' + m.id);
+      if (generation !== contextGeneration || !contextDialog.open) return;
+      if (result.source_id !== m.source_id || typeof result.text !== 'string') throw new Error('Wrong worker');
+      contextTitle.textContent = result.title || m.title; contextState.textContent = result.state || stateLabel(m);
+      if (!window.WosChat?.md) throw new Error('Markdown unavailable');
+      const template = document.createElement('template'); template.innerHTML = window.WosChat.md(result.text);
+      // Source text never starts remote media loads or runs worker actions.
+      template.content.querySelectorAll('img,video,audio,iframe,object,embed').forEach(n => n.replaceWith(document.createTextNode(n.getAttribute('alt') || '')));
+      template.content.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
+      contextReport.replaceChildren(template.content);
+    } catch (error) {
+      if (generation !== contextGeneration || !contextDialog.open) return;
+      contextReport.replaceChildren(element('p', '', error.status === 404 ? 'This worker’s response is not available anymore.' : 'Couldn’t load the worker’s response.'), action('Try again', () => openContext(m, opener)));
+      if (error.status === 404) { reply.disabled = true; full.hidden = true; }
+    }
+  }
   function renderMessage(m, previous) {
     const li = element('li', 'mgr-turn ' + (m.role === 'user' ? 'mgr-user' : 'mgr-assistant'));
     li.dataset.messageId = String(m.id);
@@ -197,27 +259,21 @@
     let body = li;
     if (m.role !== 'user') { body = element('div', 'mgr-body'); li.append(portrait(), body); }
     if (m.kind === 'ready') {
-      const card = element('article', 'mgr-card'); card.dataset.readyId = String(m.id);
-      const hasSource = !!source(m), a = attention(m), ask = typeof a.ask === 'string' ? a.ask : '';
-      card.classList.toggle('has-source', hasSource);
-      card.classList.toggle('has-attention', !!ask || ['blocked', 'failed', 'needs_input', 'needs_approval'].includes(a.state));
-      const label = {needs_you: 'Needs you', check: 'Your call', done: 'Done', fyi: 'Update'}[a.state] || 'Update';
-      const top = element('div', 'mgr-card-top'); top.append(element('span', '', label), time(m.created));
-      card.append(top, element('h2', '', m.title || 'Work thread'), messageText(m, 'mgr-summary'));
-      if (ask) card.append(element('p', 'mgr-ask', ask));
-      if (m.source_available === false) card.append(element('p', '', 'This thread isn’t available anymore.'));
-      const actions = element('div', 'mgr-actions');
-      if (hasSource) actions.append(link(m));
-      actions.append(action('Reply', () => chooseTarget(targetOf(m)), !hasSource));
-      card.append(actions); body.append(card);
+      // Stored summaries need no migration: the same words are now chat text.
+      body.append(messageText(m, 'mgr-text mgr-summary'));
+      const a = attention(m), ask = typeof a.ask === 'string' ? a.ask.trim() : '';
+      // Earlier summaries omitted the ask because the old card showed it. Keep
+      // those decisions visible without duplicating new conversational summaries.
+      if (ask && !/^nothing needed[.!]?$/i.test(ask) && !m.text.toLowerCase().includes(ask.toLowerCase())) body.append(element('p', 'mgr-text mgr-ask', ask));
+      body.append(contextChip(m));
+      if (m.source_available === false) body.append(element('p', 'mgr-message-state', 'This thread isn’t available anymore.'));
+      body.append(time(m.created));
     } else if (m.kind === 'delegation' && source(m)) {
-      // Backend emits delegation only after actual downstream run admission.
-      const receipt = element('div', 'mgr-receipt');
-      receipt.append(messageText(m, 'mgr-text'), element('p', '', 'Accepted—not finished yet.'));
-      const actions = element('div', 'mgr-actions'); actions.append(link(m, 'Open thread →')); receipt.append(actions); body.append(receipt, time(m.created));
+      // A real admission receipt is context, not another full-sized update card.
+      body.append(contextChip(m), time(m.created));
     } else {
       body.append(messageText(m, 'mgr-text'));
-      if (source(m) && m.role !== 'user') { const actions = element('div', 'mgr-actions'); actions.append(link(m)); body.append(actions); }
+      if (source(m) && m.role !== 'user') body.append(contextChip(m));
       if (!continuation) body.append(time(m.created));
     }
     if (m.role === 'user' && typeof m.job_id === 'string' && m.job_id.startsWith('user:')) {
@@ -241,7 +297,7 @@
       const key = JSON.stringify([job?.status, answer?.kind, target?.title, enabled, busy, error, connected, togglePending]);
       if (node.dataset.state === key) continue;
       node.dataset.state = key; node.replaceChildren();
-      if (target) node.append(element('span', 'mgr-message-state', '↳ to ' + target.title));
+      if (target) node.append(element('span', 'mgr-message-state', '↪ to ' + target.title));
       if (target && answer?.kind === 'delegation') node.append(element('span', '', 'Delivered to thread'));
       else if (job?.status === 'failed') {
         node.append(element('span', '', 'Archimedes couldn’t finish that reply.'), action(busy ? 'Checking…' : 'Retry', () => retryJob(id), busy || !canOperate()));
@@ -255,8 +311,8 @@
   function renderControls() {
     $('storage-state').hidden = saved;
     $('send').disabled = !canOperate() || !saved || !input.value.trim() || !!draft.sending || submitting || targetInvalid() || !!pendingTarget;
-    input.placeholder = draft.target ? 'Reply in ' + draft.target.title + '…' : 'Message Archimedes';
-    input.setAttribute('aria-label', draft.target ? 'Reply in ' + draft.target.title : 'Message Archimedes');
+    input.placeholder = draft.target ? 'Reply to ' + draft.target.title + '…' : 'Message Archimedes';
+    input.setAttribute('aria-label', draft.target ? 'Reply to ' + draft.target.title : 'Message Archimedes');
     $('send').setAttribute('aria-label', draft.target ? 'Send to ' + draft.target.title : 'Send to Archimedes');
     panel('destination', JSON.stringify([draft.target, targetInvalid(), !!input.value]), node => {
       if (draft.target) {
@@ -264,13 +320,13 @@
           node.append(element('span', 'mgr-error', 'Can’t reply: ' + draft.target.title + ' isn’t available.'), action('Message Archimedes instead', clearTarget));
         } else {
           const strip = element('div', 'mgr-target'); const clear = action('×', clearTarget); clear.setAttribute('aria-label', 'Clear reply target');
-          strip.append(element('span', '', '↳ Replying in ' + draft.target.title), clear); node.append(strip);
+          strip.append(element('span', '', '↪ Replying to ' + draft.target.title), clear); node.append(strip);
         }
       } else if (input.value) node.append(element('span', 'mgr-to', 'To Archimedes'));
     });
     panel('confirmation', JSON.stringify(pendingTarget), node => {
       if (!pendingTarget) return;
-      node.append(element('span', '', 'Reply in ' + pendingTarget.title + ' instead?'));
+      node.append(element('span', '', 'Reply to ' + pendingTarget.title + ' instead?'));
       node.append(action('Keep current target', cancelTarget), action('Switch to ' + pendingTarget.title, () => { const next = pendingTarget; cancelTarget(); setTarget(next); }));
     });
     panel('send-state', JSON.stringify([draft.sending?.state, draft.sending?.request_id, enabled, submitting, canOperate()]), node => {
@@ -400,6 +456,7 @@
       const li = renderMessage(m, ordered[i - 1]); nodes.set(m.id, li);
       thread.insertBefore(li, nodes.get(existing[successor]?.id) || null);
     }
+    if (contextMessage && !source(messages.get(contextMessage.id) || {})) closeContext();
     paintDivider(); persistRead();
     reconcileSubmission();
     if (loaded && newMessages.length) {
@@ -562,7 +619,7 @@
     scroller.hidden = !activeProject; $('compose').hidden = !activeProject;
     const current = projects.find(p => p.id === activeProject);
     $('project-title').textContent = current?.name || 'Project Chats';
-    $('project-running').textContent = current ? current.running + ' running' : '';
+    $('project-running').textContent = current?.running ? current.running + ' running' : '';
     if (activeProject && !current) { selectProject(null); return; }
     const signature = JSON.stringify(projects);
     if ($('project-list').dataset.signature === signature) return;
@@ -575,10 +632,10 @@
       const mark = element('span', 'project-mark', p.name.slice(0,1).toUpperCase());
       const content = element('span', 'project-content');
       const top = element('span', 'project-top'); top.append(element('strong', '', p.name));
-      top.append(element('span', 'project-running', p.running + ' running'));
+      top.append(element('span', 'project-running', p.running ? p.running + ' running' : ''));
       const preview = element('span', 'project-preview', p.preview);
       content.append(top, preview); row.append(mark, content);
-      if (p.unread) row.append(element('span', 'project-unread', p.unread));
+      row.append(element('span', 'project-badge-slot' + (p.unread ? ' project-unread' : ''), p.unread ? String(p.unread) : ''));
       row.onclick = () => selectProject(p.id); return row;
     });
     $('project-list').replaceChildren(title, copy, ...rows);
@@ -588,7 +645,7 @@
     if (activeProject) { saveScroll(); if (!persist()) return; }
     // Paint the destination before any I/O. An in-flight state response is
     // pinned to its project and discarded by refresh when the selection changes.
-    activeProject = pid;
+    closeContext(); activeProject = pid;
     renderProjects(projectSnapshot);
     cursor = 0; loaded = false; restoring = true; serverReadAt = 0;
     messages.clear(); nodes.clear(); jobNodes.clear(); richText.clear(); panels.clear(); dwell.clear();
