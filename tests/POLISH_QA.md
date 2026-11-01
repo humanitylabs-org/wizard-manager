@@ -7,12 +7,10 @@ changes. No new worker actions or source fetches.
 
 ## Behaviour
 
-- Each Ready update has one message paragraph. A meaningful structured ask is
-  plain text, not a second paraphrase appended to an older stored summary. If the
-  summary already contains that ask, its prose stays intact. Empty asks and
-  “Nothing needed” keep the summary. When the ask replaces a stored summary,
-  the original remains readable as plain text under **Original project update**
-  in the existing context sheet. No stored rows are rewritten.
+- Each Ready update always renders the complete stored summary, including all
+  paragraphs. A structured ask never replaces it or adds a second paragraph.
+  A meaningful ask absent from the prose may appear as inert accent text in the
+  thin needs-you / your-call chip. No stored rows are rewritten.
 - The jump pill occupies a reserved composer row, outside the conversation's
   scroll rectangle. Bottom padding alone cannot prevent overlap while reading
   the middle of history. The same isolation holds with a taller composer and

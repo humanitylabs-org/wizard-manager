@@ -183,11 +183,8 @@
     try { const value = typeof m.attention === 'string' ? JSON.parse(m.attention) : m.attention; return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch (_) { return {}; }
   }
   function readyText(m) {
-    const ask = attention(m).ask;
-    // Older cards stored two paraphrases of the same update. Use the faithful
-    // structured ask as the message, not a second paragraph or executable action.
-    // Keep a conversational summary that already contains the complete ask.
-    return typeof ask === 'string' && ask.trim() && !/^nothing needed[.!]?$/i.test(ask.trim()) && !m.text.toLowerCase().includes(ask.trim().toLowerCase()) ? ask.trim() : m.text;
+    // The stored summary is the message. Never replace paragraphs with an ask.
+    return m.text;
   }
   function targetOf(m) { return { reply_to: m.id, source_id: m.source_id, source_message: m.source_message || null, title: m.title || 'Work thread' }; }
   function targetInvalid() {
@@ -223,7 +220,9 @@
     return ({done:'done', needs_you:'needs you', needs_approval:'needs you', needs_input:'needs you', check:'your call', fyi:'update'})[attention(m).state] || attention(m).state || (m.kind === 'delegation' ? (/^→ continuing/.test(m.text) ? 'continuing' : 'new thread') : 'update');
   }
   function paintState(node, m) {
-    const label = stateLabel(m); node.textContent = label;
+    const label = stateLabel(m), ask = attention(m).ask;
+    const extra = typeof ask === 'string' && ask.trim() && !/^nothing needed[.!]?$/i.test(ask.trim()) && !String(m.text || '').toLowerCase().includes(ask.trim().toLowerCase());
+    node.textContent = label + (extra && (label === 'needs you' || label === 'your call') ? ' · ' + ask.trim() : '');
     node.classList.toggle('needs-you', label === 'needs you' || label === 'your call');
   }
   function contextChip(m) {
