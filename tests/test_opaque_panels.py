@@ -8,7 +8,7 @@ class OpaquePanelSourceTests(unittest.TestCase):
         rule=re.search(r'\.mgr\s*\{([^}]+)',css)
         assert rule is not None
         self.assertIn('width:100%',rule.group(1))
-        self.assertNotIn('max-width',rule.group(1))
+        self.assertIn('max-width:none',rule.group(1))
 
     def test_floating_text_panels_use_shared_opaque_roles(self):
         css=(pathlib.Path(__file__).resolve().parents[1]/'web/styles.css').read_text()
