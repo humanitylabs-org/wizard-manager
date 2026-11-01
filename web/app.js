@@ -182,6 +182,13 @@
     // Only structured plain text is displayed. No worker-provided action is executable.
     try { const value = typeof m.attention === 'string' ? JSON.parse(m.attention) : m.attention; return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch (_) { return {}; }
   }
+  function readyText(m) {
+    const ask = attention(m).ask;
+    // Older cards stored two paraphrases of the same update. Use the faithful
+    // structured ask as the message, not a second paragraph or executable action.
+    // Keep a conversational summary that already contains the complete ask.
+    return typeof ask === 'string' && ask.trim() && !/^nothing needed[.!]?$/i.test(ask.trim()) && !m.text.toLowerCase().includes(ask.trim().toLowerCase()) ? ask.trim() : m.text;
+  }
   function targetOf(m) { return { reply_to: m.id, source_id: m.source_id, source_message: m.source_message || null, title: m.title || 'Work thread' }; }
   function targetInvalid() {
     if (!draft.target) return false;
@@ -197,13 +204,15 @@
   const contextClose = action('×', closeContext); contextClose.setAttribute('aria-label', 'Close worker context');
   contextHead.append(contextTitle, contextClose);
   const contextState = element('p', 'mgr-context-state');
+  const contextSummary = element('details', 'mgr-context-summary');
   const contextReport = element('div', 'mgr-context-report'); contextReport.setAttribute('aria-live', 'polite');
   const contextActions = element('div', 'mgr-context-actions');
-  contextDialog.append(contextHead, contextState, contextReport, contextActions); document.querySelector('.mgr').append(contextDialog);
+  contextDialog.append(contextHead, contextState, contextSummary, contextReport, contextActions); document.querySelector('.mgr').append(contextDialog);
   function closeContext() {
     contextGeneration++; contextMessage = null;
     if (contextDialog.open) contextDialog.close();
     contextLayer?.release(); contextLayer = null;
+    contextSummary.replaceChildren(); contextSummary.hidden = true;
     contextReport.replaceChildren(); contextActions.replaceChildren();
     contextTitle.textContent = 'Worker context'; contextState.textContent = '';
     contextOpener?.focus(); contextOpener = null;
@@ -213,10 +222,15 @@
   function stateLabel(m) {
     return ({done:'done', needs_you:'needs you', needs_approval:'needs you', needs_input:'needs you', check:'your call', fyi:'update'})[attention(m).state] || attention(m).state || (m.kind === 'delegation' ? (/^→ continuing/.test(m.text) ? 'continuing' : 'new thread') : 'update');
   }
+  function paintState(node, m) {
+    const label = stateLabel(m); node.textContent = label;
+    node.classList.toggle('needs-you', label === 'needs you' || label === 'your call');
+  }
   function contextChip(m) {
     const chip = element('button', 'mgr-context-chip'); chip.type = 'button';
     chip.dataset.readyId = String(m.id); chip.setAttribute('aria-haspopup', 'dialog');
-    chip.append(element('span', 'mgr-chip-title', m.title || 'Work thread'), element('span', 'mgr-chip-state', stateLabel(m)), element('span', 'mgr-chip-arrow', '›'));
+    const state = element('span', 'mgr-chip-state'); paintState(state, m);
+    chip.append(element('span', 'mgr-chip-title', m.title || 'Work thread'), state, element('span', 'mgr-chip-arrow', '›'));
     chip.disabled = !source(m); chip.onclick = () => openContext(m, chip);
     return chip;
   }
@@ -225,7 +239,11 @@
     if (contextDialog.open) closeContext();
     contextOpener = opener; contextMessage = m;
     const generation = ++contextGeneration;
-    contextTitle.textContent = m.title || 'Work thread'; contextState.textContent = stateLabel(m);
+    contextTitle.textContent = m.title || 'Work thread'; paintState(contextState, m);
+    // The original stored summary remains inspectable, without repeating it in chat.
+    contextSummary.replaceChildren(); contextSummary.open = false;
+    contextSummary.hidden = m.kind !== 'ready' || readyText(m) === m.text;
+    if (!contextSummary.hidden) contextSummary.append(element('summary', '', 'Original project update'), element('p', '', m.text));
     contextReport.replaceChildren(element('p', '', 'Loading worker’s latest response…'));
     const reply = action('Reply in this project', () => { const target = targetOf(m); closeContext(); chooseTarget(target); });
     const full = link(m, 'Open full thread'); full.onclick = () => closeContext();
@@ -237,7 +255,7 @@
       const result = await api('api/worker-context?project_id=' + encodeURIComponent(activeProject || 'unsorted') + '&message_id=' + m.id);
       if (generation !== contextGeneration || !contextDialog.open) return;
       if (result.source_id !== m.source_id || typeof result.text !== 'string') throw new Error('Wrong worker');
-      contextTitle.textContent = result.title || m.title; contextState.textContent = result.state ? stateLabel({attention:{state:result.state}}) : stateLabel(m);
+      contextTitle.textContent = result.title || m.title; paintState(contextState, result.state ? {attention:{state:result.state}} : m);
       if (!window.WosChat?.md) throw new Error('Markdown unavailable');
       const template = document.createElement('template'); template.innerHTML = window.WosChat.md(result.text);
       // Source text never starts remote media loads or runs worker actions.
@@ -259,12 +277,10 @@
     let body = li;
     if (m.role !== 'user') { body = element('div', 'mgr-body'); li.append(portrait(), body); }
     if (m.kind === 'ready') {
-      // Stored summaries need no migration: the same words are now chat text.
-      body.append(messageText(m, 'mgr-text mgr-summary'));
-      const a = attention(m), ask = typeof a.ask === 'string' ? a.ask.trim() : '';
-      // Earlier summaries omitted the ask because the old card showed it. Keep
-      // those decisions visible without duplicating new conversational summaries.
-      if (ask && !/^nothing needed[.!]?$/i.test(ask) && !m.text.toLowerCase().includes(ask.toLowerCase())) body.append(element('p', 'mgr-text mgr-ask', ask));
+      // One update, one message. Structured asks are always inert plain text;
+      // only stored summary prose uses the existing canonical thread resolver.
+      const text = readyText(m);
+      body.append(text === m.text ? messageText(m, 'mgr-text mgr-summary') : element('p', 'mgr-text mgr-summary', text));
       body.append(contextChip(m));
       if (m.source_available === false) body.append(element('p', 'mgr-message-state', 'This thread isn’t available anymore.'));
       body.append(time(m.created));
