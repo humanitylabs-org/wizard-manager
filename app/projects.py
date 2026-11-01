@@ -14,6 +14,10 @@ from manager import Manager, Problem, MODEL, thread_link
 from ready_source import ACTIVE
 from thread_lookup import visible
 
+# Immutable revisions retain exact reply targets and history. Only the newest
+# revision of a worker is projected into chat; its new ID moves it to the bottom.
+CURRENT = "(m.kind!='ready' OR m.source_id IS NULL OR NOT EXISTS (SELECT 1 FROM messages newer WHERE newer.project_id=m.project_id AND newer.source_id=m.source_id AND newer.kind='ready' AND newer.id>m.id))"
+
 
 class ProjectManager(Manager):
     def __init__(self, *args, prefs_path=None, **kwargs):
@@ -28,6 +32,7 @@ class ProjectManager(Manager):
               CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,read_id INTEGER NOT NULL DEFAULT 0,last_worker TEXT);
               CREATE TABLE IF NOT EXISTS project_members(project_id TEXT NOT NULL,session_id TEXT NOT NULL,owned INTEGER NOT NULL DEFAULT 0,filed INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(project_id,session_id));
               CREATE INDEX IF NOT EXISTS messages_project ON messages(project_id,id);
+              CREATE INDEX IF NOT EXISTS messages_worker_revisions ON messages(project_id,source_id,kind,id);
               CREATE INDEX IF NOT EXISTS jobs_project ON jobs(project_id,created);
             ''')
             c.execute("INSERT OR IGNORE INTO projects(id,name) VALUES ('unsorted','Unsorted')")
@@ -120,9 +125,9 @@ class ProjectManager(Manager):
             sources = {r[0] for r in c.execute("SELECT DISTINCT source_id FROM messages WHERE source_id IS NOT NULL AND role='assistant'")}
             blocked = self.blocked_sources(sources)
             for p in projects:
-                rows = [dict(r) for r in c.execute("SELECT id,text,created,kind,source_id,role FROM messages WHERE project_id=? ORDER BY id DESC", (p['id'],))
+                rows = [dict(r) for r in c.execute("SELECT m.id,m.text,m.created,m.kind,m.source_id,m.role FROM messages m WHERE m.project_id=? AND " + CURRENT + " ORDER BY m.id DESC", (p['id'],))
                         if r['role'] == 'user' or r['source_id'] not in blocked]
-                p['unread'] = sum(r['kind'] == 'ready' and r['id'] > p['read_id'] for r in rows)
+                p['unread'] = len({r['source_id'] for r in rows if r['kind'] == 'ready' and r['id'] > p['read_id']})
                 p['preview'] = rows[0]['text'][:140] if rows else 'Send a request or catch up on this Space.'
                 p['updated'] = rows[0]['created'] if rows else None
                 index = self.project_index(p['id'])
@@ -135,7 +140,7 @@ class ProjectManager(Manager):
         # Query the chosen project before pagination: other conversations never
         # leak through a global page, including while a model reply is pending.
         with self.connect() as c:
-            rows = [dict(r) for r in c.execute('SELECT * FROM messages WHERE project_id=? AND id>? ORDER BY id LIMIT 1000', (project_id, after))]
+            rows = [dict(r) for r in c.execute('SELECT m.* FROM messages m WHERE m.project_id=? AND m.id>? AND ' + CURRENT + ' ORDER BY m.id LIMIT 1000', (project_id, after))]
             sources = {r[0] for r in c.execute("SELECT DISTINCT source_id FROM messages WHERE project_id=? AND role='assistant' AND source_id IS NOT NULL", (project_id,))}
             jobs = [dict(r) for r in c.execute("SELECT id,status,error,session_id,run_id,created FROM jobs WHERE project_id=? AND status!='done' ORDER BY created", (project_id,))]
             pending = c.execute("SELECT count(*) FROM events WHERE project_id=? AND status!='done'", (project_id,)).fetchone()[0]
@@ -147,6 +152,16 @@ class ProjectManager(Manager):
                 'next_after': rows[-1]['id'] if rows else after, 'has_more': len(rows) == 1000,
                 'monitor': {'last_scan': self.last_scan, 'error': self.spaces_error or self.error, 'pending': pending},
                 'model_calls': self.model_calls, 'version': '0.3.0'}
+
+    def update_history(self, project_id, message_id, before=0):
+        self.require_project(project_id)
+        with self.connect() as c:
+            row = c.execute("SELECT source_id FROM messages WHERE id=? AND project_id=? AND kind='ready'", (message_id, project_id)).fetchone()
+            if not row or not self.safe_worker(row['source_id']) or row['source_id'] not in self.members(project_id) or self.blocked_sources([row['source_id']]):
+                raise Problem(404, 'This worker is not available in this project.')
+            rows = [dict(r) for r in c.execute("SELECT id,text,created,attention FROM messages WHERE project_id=? AND source_id=? AND kind='ready' AND id<? ORDER BY id DESC LIMIT 21",
+                    (project_id, row['source_id'], before or message_id))]
+        return {'history': rows[:20], 'has_more': len(rows) > 20, 'before': rows[19]['id'] if len(rows) > 20 else 0}
 
     def worker_context(self, project_id, message_id):
         """On-demand report for a linked message, never an arbitrary session lookup."""

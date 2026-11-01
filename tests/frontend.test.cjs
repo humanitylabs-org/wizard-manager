@@ -50,6 +50,7 @@ async function setup(t, options = {}) {
     if (custom && await custom(route, req, url)) return;
     const fulfill = data => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) });
     if (url.pathname === '/api/state') return fulfill({ ...state, messages: state.messages.filter(m => m.id > Number(url.searchParams.get('after') || 0)).slice(0, 1000) });
+    if (url.pathname === '/api/update-history') return fulfill({history:[],has_more:false,before:0});
     if (url.pathname === '/api/worker-context') {
       const m = state.messages.find(m => m.id === Number(url.searchParams.get('message_id')));
       return fulfill({ source_id: m.source_id, title: m.title, state: 'done', text: '## Worker report\n\n**Verified fixture** report for ' + m.title });
@@ -236,6 +237,15 @@ test('empty is honest; standalone and hosted identity, width, and transparent in
   assert.equal(await f.frame.locator('#announcer').textContent(), '');
   if (evidence) await f.page.screenshot({ path: path.join(evidence, 'empty-desktop.png') });
 });
+test('new revision replaces one worker update at the bottom without duplicating asks', async t => {
+  const f = await setup(t, {state:{messages:[ready(1,'One',{source_id:'worker-one'}),ready(2,'Two',{source_id:'worker-two'})]}});
+  f.state.messages.push(ready(3,'One',{source_id:'worker-one',text:'New consolidated result.\n\nThe old choice is resolved.',attention:{state:'done',ask:'Nothing needed'}}));
+  await f.poll();
+  assert.equal(await f.frame.locator('.mgr-summary').count(),2);
+  assert.deepEqual(await f.frame.locator('.mgr-assistant[data-message-id]').evaluateAll(ns=>ns.map(n=>n.dataset.messageId)),['2','3']);
+  assert.equal(await f.frame.locator('[data-message-id="1"]').count(),0);
+  assert.equal(await f.frame.locator('[data-message-id="3"] .mgr-summary').textContent(),'New consolidated result.\n\nThe old choice is resolved.');
+});
 test('thin worker states keep outcome semantics without cards', async t => {
   const f=await setup(t,{state:{messages:[ready(1,'Done worker',{attention:JSON.stringify({state:'done',ask:'Nothing needed'})}),ready(2,'Needs worker',{attention:JSON.stringify({state:'needs_you',ask:'Reply GO'})}),ready(3,'Check worker',{attention:JSON.stringify({state:'check'})}),ready(4,'FYI worker',{attention:JSON.stringify({state:'fyi'})})]}});
   assert.deepEqual(await f.frame.locator('.mgr-chip-state').allTextContents(),['done','needs you · Reply GO','your call','update']);
@@ -301,7 +311,7 @@ test('Ready preserves full paragraphs and keeps the inert ask in its chip; stabl
   assert.equal(await f.frame.locator('[data-ready-id="1"]').getAttribute('aria-haspopup'), 'dialog');
   await f.frame.locator('#message').fill('Please approve the publication');
   await f.frame.locator('[data-ready-id="1"]').click();
-  assert.equal(await f.frame.locator('.mgr-context-summary').isVisible(), false, 'the summary is already visible in chat');
+  assert.equal(await f.frame.locator('.mgr-context-summary summary').textContent(), 'Earlier project updates');
   await f.frame.getByRole('button', {name:'Reply in this project', exact:true}).click();
   assert.match(await f.frame.locator('#confirmation').textContent(), /Reply to First thread instead/);
   await f.page.locator('#back').click();

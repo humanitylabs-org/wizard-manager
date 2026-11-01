@@ -101,6 +101,51 @@ class ProjectTests(unittest.TestCase):
         self.m.mark_read({'project_id': 'alpha', 'through': a['messages'][0]['id']})
         self.assertEqual(next(p for p in self.m.project_list() if p['id'] == 'alpha')['unread'], 0)
 
+    def test_one_consolidated_update_per_worker_retains_history_and_replaces_ask(self):
+        self.api.output = 'First outcome. Still waiting for a choice.'
+        self.ready.add(sid='work_alpha'); self.m.scan(); self.m.summarize()
+        first = self.m.state(project_id='alpha')['messages'][0]
+        self.m.mark_read({'project_id': 'alpha', 'through': first['id']})
+        self.api.output = 'The choice is resolved. The new result is shipped.\n\nNothing else needed.'
+        from test_manager import tagged
+        self.ready.add(body=tagged('New outcome', 'done', 'Nothing needed'), sid='work_alpha', created=30)
+        self.m.scan(); self.m.summarize()
+        state = self.m.state(project_id='alpha')
+        self.assertEqual(len(state['messages']), 1)
+        current = state['messages'][0]
+        self.assertGreater(current['id'], first['id'])
+        self.assertIn('\n\n', current['text'])
+        self.assertEqual(next(p for p in state['projects'] if p['id']=='alpha')['unread'], 1)
+        calls = [body for url, body, _, _ in self.api.calls if url == 'http://model']
+        payload = json.loads(calls[-1]['messages'][-1]['content'])
+        self.assertEqual(payload['previous_consolidated_summary'], first['text'])
+        self.assertEqual(payload['attention']['ask'], 'Nothing needed')
+        delta = self.m.state(first['id'], 'alpha')
+        self.assertEqual([r['id'] for r in delta['messages']], [current['id']])
+        history = self.m.update_history('alpha', current['id'])
+        self.assertEqual([r['id'] for r in history['history']], [first['id']])
+        with self.m.connect() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM messages WHERE kind='ready'").fetchone()[0], 2)
+        self.ready.blocked.add('work_alpha')
+        with self.assertRaises(Problem): self.m.update_history('alpha', current['id'])
+        with self.assertRaises(Problem): self.m.update_history('beta', current['id'])
+
+    def test_backlog_collapses_without_deleting_and_history_paginates(self):
+        with self.m.connect() as c:
+            for i in range(45):
+                c.execute("INSERT INTO messages(role,text,created,kind,source_id,project_id) VALUES ('assistant',?,?,'ready','work_alpha','alpha')", ('Summary '+str(i), i))
+        state = self.m.state(project_id='alpha')
+        self.assertEqual(len(state['messages']), 1)
+        self.assertEqual(next(p for p in state['projects'] if p['id']=='alpha')['unread'], 1)
+        current = state['messages'][0]['id']; before = 0; ids = []
+        while True:
+            page = self.m.update_history('alpha', current, before)
+            ids += [r['id'] for r in page['history']]
+            if not page['has_more']: break
+            before = page['before']
+        self.assertEqual(len(ids), 44)
+        self.assertEqual(len(set(ids)), 44)
+
     def test_ready_dedupes_after_restart(self):
         self.ready.add(sid='work_alpha')
         self.m.scan(); self.m.summarize()
