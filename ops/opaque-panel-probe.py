@@ -16,7 +16,7 @@ def probe(evaluate, cdp):
         data=cdp('Page.captureScreenshot',format='png')['data']
         return Image.open(io.BytesIO(base64.b64decode(data))).convert('RGB')
     a=snap()
-    box=evaluate("(()=>{const r=d.querySelector('#options').getBoundingClientRect(),f=d.defaultView.frameElement.getBoundingClientRect();return [r.left+f.left+12,r.top+f.top+12,r.right+f.left-12,r.bottom+f.top-12]})()")
+    box=evaluate("(()=>{const r=d.querySelector('#options').getBoundingClientRect(),f=d.defaultView.frameElement?.getBoundingClientRect()||{left:0,top:0};return [r.left+f.left+12,r.top+f.top+12,r.right+f.left-12,r.bottom+f.top-12]})()")
     evaluate("(()=>{const e=d.getElementById('opaque-panel-qa');e.style.background='#ff00ff';e.style.color='#00ff00';return true})()")
     b=snap();region=tuple(map(round,box));diff=ImageChops.difference(a.crop(region),b.crop(region))
     histogram=diff.convert('L').histogram();changed=sum(histogram[1:])
