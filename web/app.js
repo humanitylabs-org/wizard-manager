@@ -14,6 +14,8 @@
   let saved = true, hold = null, loaded = false, connected = false, enabled = null, connectionFailed = false;
   let cursor = 0, jobs = [], refreshing = null, submitting = false, togglePending = null;
   let toggleUnknown = false, toggleError = '', pendingTarget = null, confirmLayer = null, optionsLayer = null;
+  let frontDesk = false, frontDeskPending = null, frontDeskError = '';
+  const sourceAgents = new Map();
   let pinned = true, scrollFrame = 0, retrying = new Set(), jobErrors = new Set();
   let restoring = true;
   // Seen receipts are separate from the stable catch-up boundary. Fetching never reads.
@@ -152,14 +154,15 @@
   }
   function source(m) { return typeof m.source_id === 'string' && m.source_id.trim() && m.source_id.length < 2048 && m.source_available !== false; }
   function link(m, label = 'Open thread') {
-    const a = element('a', '', label); a.href = '/wizard-os-home/?session=' + encodeURIComponent(m.source_id);
+    if (!m.source_agent && sourceAgents.has(m.source_id)) m = { ...m, source_agent: sourceAgents.get(m.source_id) };
+    const a = element('a', '', label); a.href = '/wizard-os-home/?session=' + encodeURIComponent(m.source_id) + (m.source_agent ? '&agent=' + encodeURIComponent(m.source_agent) : '');
  a.dataset.wizardNativeThread = m.source_id; a.target = '_top';
     a.addEventListener('click', event => {
       if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault(); if (!connected) { void refresh(); return; } saveScroll();
       if (!persist()) { renderControls(); say('Draft couldn’t be saved. Keep this window open.'); return; }
       try {
-        if (core?.nav?.openThread(m.source_id)) { observeRead(); return; }
+        if (core?.nav?.openThread(m.source_id, m.source_agent ? { agent: m.source_agent } : undefined)) { observeRead(); return; }
       } catch (_) {}
       if (!core?.hosted) { location.assign(a.href); return; }
       say('Open Manager in the updated Wizard shell to read this thread here.');
@@ -345,7 +348,7 @@
       }
     }
   }
-  function canOperate() { return !!core && loaded && connected && navigator.onLine && enabled === true && togglePending === null && !toggleUnknown; }
+  function canOperate() { return !!core && loaded && connected && navigator.onLine && enabled === true && togglePending === null && frontDeskPending === null && !frontDeskError && !toggleUnknown; }
   function renderControls() {
     $('storage-state').hidden = saved;
     $('send').disabled = !canOperate() || !saved || !input.value.trim() || !!draft.sending || submitting || targetInvalid() || !!pendingTarget;
@@ -396,6 +399,10 @@
     $('enabled').disabled = !loaded || !connected || togglePending !== null || toggleUnknown;
     $('enabled').setAttribute('aria-checked', String(enabled === true));
     $('enabled-label').textContent = enabled === null ? 'Checking…' : enabled ? 'On' : 'Off';
+    $('front-desk-trial').disabled = !loaded || !connected || frontDeskPending !== null;
+    $('front-desk-trial').setAttribute('aria-checked', String(frontDeskPending ?? frontDesk));
+    $('front-desk-label').textContent = frontDeskPending !== null ? 'Saving…' : frontDesk ? 'On' : 'Off';
+    $('front-desk-state').textContent = frontDeskError || (frontDesk ? 'DeepSeek coordinates. Hermes Lite handles work unless the server permits the main agent.' : 'Optional. Off keeps the existing Claude Sonnet coordinator.');
     $('options-state').textContent = togglePending !== null ? (togglePending ? 'Turning on…' : 'Turning off… Sending is paused.') : toggleUnknown ? 'Couldn’t confirm Manager’s state.' : toggleError;
     for (const [id, node] of nodes) node.querySelector('.mgr-card')?.classList.toggle('is-target', draft.target?.reply_to === id);
     renderJobs();
@@ -444,6 +451,7 @@
     } finally { clearTimeout(timeout); }
   }
   function merge(data) {
+    frontDesk = data.front_desk_trial === true;
     if (typeof data.enabled !== 'boolean' || !Array.isArray(data.messages) || !Array.isArray(data.jobs)) throw new Error('Invalid state');
     const beforeTop = scroller.scrollTop;
     const blocked = new Set(data.suppressed_sources || [...suppressedSources]);
@@ -477,6 +485,7 @@
     }
     const newMessages = [];
     for (const m of data.messages) {
+      if (m.source_agent) sourceAgents.set(m.source_id, m.source_agent);
       if (!Number.isSafeInteger(m.id) || m.id <= 0 || !['user', 'assistant'].includes(m.role) || typeof m.text !== 'string') throw new Error('Invalid message');
       if (m.role !== 'user' && sourceBlocked(m.source_id)) continue;
       if (m.kind === 'ready' && m.source_id) {
@@ -549,6 +558,7 @@
       if (selected!==activeProject || generation!==projectGeneration || data.unchanged) return;
       metadataRevision=data.revision || '';
       if (Array.isArray(data.threads)) {
+        for (const t of data.threads) if (t.source_agent) sourceAgents.set(t.id, t.source_agent);
         inventoryKey=JSON.stringify(data.threads); resolveThreads=window.ManagerThreadLinks.resolver(data.threads);
         for (const entry of richText.values()) updateText(entry);
       }
@@ -581,6 +591,7 @@
         do {
           const before = cursor;
           page = await api('api/state?project_id=' + encodeURIComponent(selected || 'unsorted') + (stateReceived ? '&after=' + cursor : '') + '&limit='+(selected?50:1)+'&visibility_revision='+visibilityRevision);
+          frontDesk = page.front_desk_trial === true;
           if (selected !== activeProject || generation !== projectGeneration) return false;
           if (page.projects) { projectMode = true; renderProjects(page.projects); }
           if (projectMode && !activeProject) { enabled = page.enabled; connected = true; loaded = true; stateReceived=true; cursor=page.next_after || 0; failures=0; clearTimeout(retryTimer); renderControls(); return true; }
@@ -681,6 +692,17 @@
   $('options').addEventListener('cancel', event => { event.preventDefault(); closeOptions(); });
   $('options').addEventListener('click', event => { if (event.target === $('options')) { const r = $('options').getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) closeOptions(); } });
   $('enabled').onclick = () => setEnabled(!enabled);
+  $('front-desk-trial').onclick = async () => {
+    if (frontDeskPending !== null) return;
+    const next = !frontDesk; frontDeskPending = next; frontDeskError = ''; renderControls();
+    try {
+      if (refreshing) await refreshing;
+      await api('api/settings', { front_desk_trial: next });
+      if (!await refresh() || frontDesk !== next) throw new Error('Unconfirmed setting');
+    } catch (_) {
+      await refresh(); frontDeskError = 'Couldn’t confirm the trial setting. Check again before sending.';
+    } finally { frontDeskPending = null; renderControls(); }
+  };
   $('empty-enable').onclick = () => setEnabled(true);
   $('jump').onclick = toBottom;
   input.addEventListener('input', () => { draft.text = input.value; draft.rev++; persist(); resizeInput(); renderControls(); if (pinned) scroller.scrollTop = scroller.scrollHeight; });

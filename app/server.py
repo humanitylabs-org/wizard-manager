@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from manager import Problem
-from projects import ProjectManager as Manager
+from front_desk import FrontDeskManager as Manager
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_ID = 'wizard-manager'

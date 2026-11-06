@@ -66,7 +66,7 @@
     "/api/settings": {
       "post": {
         "summary": "Pause or resume optional Manager",
-        "description": "Body: enabled boolean. Returns fresh state. Worker sessions continue when paused.",
+        "description": "Body: enabled boolean (existing pause), OR front_desk_trial boolean (separate persisted optional trial, default false). Returns fresh state including front_desk_trial. OFF retains the existing model route. Public routing policy is code-owned and cannot be changed through this API. Worker sessions continue when paused.",
         "responses": {
           "200": {
             "description": "Successful response"
