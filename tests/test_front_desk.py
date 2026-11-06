@@ -16,6 +16,9 @@ from hermes_inference import SONNET_MODEL, SONNET_PROVIDER
 from manager import Problem
 from test_manager import FakeAPI, FakeReadySource
 from test_projects import ScopedReady
+from test_hermes_inference import API as LegacyInferenceAPI
+from projects import ProjectManager
+from types import SimpleNamespace
 
 
 class TrialAPI(FakeAPI):
@@ -92,6 +95,21 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(call[1]['model'], TRIAL_MODEL)
         self.assertIs(call[1]['stream'], False)
         self.infer.assert_not_called()
+
+    def test_off_transport_bytes_equal_existing_project_manager(self):
+        baseline_api, trial_api = LegacyInferenceAPI(), LegacyInferenceAPI()
+        common = {'was': 'http://was', 'model_url': 'http://model', 'key': 'fixture',
+                  'ready_source': self.source, 'prefs_path': self.prefs}
+        baseline = ProjectManager(self.root / 'baseline', request=baseline_api, **common)
+        trial = FrontDeskManager(self.root / 'transport', request=trial_api, **common)
+        messages = [{'role': 'system', 'content': 'Reply with JSON.'}, {'role': 'user', 'content': 'Hello.'}]
+        with patch('hermes_inference.uuid.uuid4', return_value=SimpleNamespace(hex='fixture_fixed')):
+            self.assertEqual(baseline.model(messages, 123), trial.model(messages, 123))
+        # Deadline budgets vary; URL, serialized payload, headers and method do not.
+        self.assertEqual([c[:4] for c in baseline_api.calls], [c[:4] for c in trial_api.calls])
+        runs = [c for c in trial_api.calls if c[0].endswith('/v1/runs')]
+        self.assertEqual(runs[0][1]['model'], SONNET_MODEL)
+        self.assertEqual(runs[0][1]['provider'], SONNET_PROVIDER)
 
     def test_default_lite(self):
         job = self.send()
