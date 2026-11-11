@@ -1,7 +1,7 @@
 ---
 name: wizard-manager
 description: Use when operating the optional Archimedes Manager chat.
-version: 0.1.0
+version: 0.1.1
 author: Humanity Labs
 license: MIT
 ---
