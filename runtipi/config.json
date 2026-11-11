@@ -10,8 +10,8 @@
     "utilities"
   ],
   "description": "A separate personal chat using DeepSeek Flash, WAS task routing and linked Ready summaries. Configure runtime routes and credential before activation.",
-  "tipi_version": 1,
-  "version": "0.1.0",
+  "tipi_version": 2,
+  "version": "0.1.1",
   "source": "https://github.com/humanitylabs-org/wizard-manager",
   "exposable": false,
   "supported_architectures": [
@@ -19,7 +19,7 @@
     "arm64"
   ],
   "created_at": 1792051081000,
-  "updated_at": 1792051081000,
+  "updated_at": 1794360823635,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,

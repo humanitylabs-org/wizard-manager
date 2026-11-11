@@ -4,7 +4,7 @@ id: wizard-manager
 name: Manager
 type: service
 category: app
-version: 0.1.0
+version: 0.1.1
 summary: An optional Archimedes conversation that delegates work and brings back concise Ready updates.
 license: MIT
 source: https://github.com/humanitylabs-org/wizard-manager
@@ -36,6 +36,9 @@ receives_voice_input: true
 uses: []
 needs: []
 health: /healthz
+switches:
+  contract: wizard.app-switches/1
+  path: /api/switches
 ---
 
 # Manager
